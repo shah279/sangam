@@ -1,0 +1,38 @@
+../.env
+.idea/
+local.properties
+
+# =======================
+# Python Bytecode
+# =======================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =======================
+# Packaging & Builds
+# =======================
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+*.egg
+
+# =======================
+# Testing & Coverage
+# =======================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# =======================
+# OS Generated & IDEs
+# =======================
+.DS_Store
+.vscode/
+.idea/
+*.swp
+/.env
+/sangam.zip
