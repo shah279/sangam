@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Sangam ingest once daily
+
+[Timer]
+# 21:00 in the box's local time. Set the box TZ to IST (see README) so this is
+# 9pm IST — well after the 3:30pm market close, catching the day's uploads.
+OnCalendar=*-*-* 21:00:00
+Persistent=true          # if the box was down at 21:00, run at next boot
+
+[Install]
+WantedBy=timers.target

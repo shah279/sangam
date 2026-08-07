@@ -1,0 +1,13 @@
+[Unit]
+Description=Sangam daily ingest (discover + captions + extract)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# --- EDIT these three to match your box ---
+User=ubuntu
+WorkingDirectory=/home/ubuntu/sangam
+ExecStart=/home/ubuntu/sangam/.venv/bin/python3 -m sangam.ingest
+# .env in WorkingDirectory is loaded automatically by python-dotenv.
+# Logs go to the journal: journalctl -u sangam-ingest
