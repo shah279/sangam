@@ -25,10 +25,12 @@ RESPONSE_SCHEMA = {
                     "raw_mention": {"type": "string"},
                     "instrument_type": {"type": "string", "enum": TYPES},
                     "action": {"type": "string", "enum": ACTIONS},
+                    "conviction": {"type": "integer"},
+                    "note": {"type": "string"},
                     "confidence": {"type": "number"},
                     "evidence": {"type": "string"},
                 },
-                "required": ["raw_mention", "instrument_type", "action", "confidence", "evidence"],
+                "required": ["raw_mention", "instrument_type", "action", "conviction", "note", "confidence", "evidence"],
             },
         },
     },
@@ -54,6 +56,10 @@ Hard rules:
 return an EMPTY mentions list and say so in the summary.
 - NEVER treat hashtags (#nifty), smallcase/course/book plugs, channel names, or SEBI \
 disclaimers as mentions. Only count instruments the speaker actually discusses.
+- note: 1-2 plain sentences on what the speaker specifically said about THIS instrument \
+(their reasoning, target, level, or concern), grounded in the transcript.
+- conviction: integer 1-5 for how strongly the speaker pushes this view — 1 = passing/neutral \
+mention, 3 = a clear stated view, 5 = an emphatic high-conviction call. Neutral mentions are 1-2.
 - evidence must be grounded in the text, <=15 words.
 - Base EVERYTHING strictly on the transcript. Prefer specific names and figures actually \
 stated; never add outside knowledge or invent numbers.
@@ -148,6 +154,8 @@ def _extract_one(title, transcript_status, transcript_text, description):
             "resolved_symbol": normalize.resolve(m.get("raw_mention", ""), m.get("instrument_type")),
             "instrument_type": m.get("instrument_type"),
             "action": m.get("action"),
+            "conviction": m.get("conviction"),
+            "note": m.get("note"),
             "confidence": min(float(m.get("confidence", 0)), cap),
             "evidence": m.get("evidence"),
         })

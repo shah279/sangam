@@ -114,6 +114,8 @@ def insert_mentions(conn, video_id, rows, source):
         "resolved_symbol": r.get("resolved_symbol"),
         "instrument_type": r.get("instrument_type"),
         "action": r.get("action"),
+        "conviction": r.get("conviction"),
+        "note": r.get("note"),
         "confidence": r.get("confidence"),
         "evidence": r.get("evidence"),
         "source": source,

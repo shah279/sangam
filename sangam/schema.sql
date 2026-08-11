@@ -44,3 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_mentions_video      ON mentions(video_id);
 -- Extraction slice: flag whether a mention came from the transcript or the
 -- (lower-trust) description. Idempotent so re-running schema.sql is safe.
 ALTER TABLE mentions ADD COLUMN IF NOT EXISTS source TEXT;  -- transcript | description
+
+-- Per-mention note + conviction (idempotent)
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS conviction INT;
