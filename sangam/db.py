@@ -116,6 +116,7 @@ def insert_mentions(conn, video_id, rows, source):
         "action": r.get("action"),
         "conviction": r.get("conviction"),
         "note": r.get("note"),
+        "long_note": r.get("long_note"),
         "confidence": r.get("confidence"),
         "evidence": r.get("evidence"),
         "source": source,

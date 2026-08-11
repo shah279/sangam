@@ -48,3 +48,4 @@ ALTER TABLE mentions ADD COLUMN IF NOT EXISTS source TEXT;  -- transcript | desc
 -- Per-mention note + conviction (idempotent)
 ALTER TABLE mentions ADD COLUMN IF NOT EXISTS note TEXT;
 ALTER TABLE mentions ADD COLUMN IF NOT EXISTS conviction INT;
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS long_note TEXT;

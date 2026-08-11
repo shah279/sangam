@@ -27,10 +27,11 @@ RESPONSE_SCHEMA = {
                     "action": {"type": "string", "enum": ACTIONS},
                     "conviction": {"type": "integer"},
                     "note": {"type": "string"},
+                    "long_note": {"type": "string"},
                     "confidence": {"type": "number"},
                     "evidence": {"type": "string"},
                 },
-                "required": ["raw_mention", "instrument_type", "action", "conviction", "note", "confidence", "evidence"],
+                "required": ["raw_mention", "instrument_type", "action", "conviction", "note", "long_note", "confidence", "evidence"],
             },
         },
     },
@@ -56,8 +57,10 @@ Hard rules:
 return an EMPTY mentions list and say so in the summary.
 - NEVER treat hashtags (#nifty), smallcase/course/book plugs, channel names, or SEBI \
 disclaimers as mentions. Only count instruments the speaker actually discusses.
-- note: 1-2 plain sentences on what the speaker specifically said about THIS instrument \
-(their reasoning, target, level, or concern), grounded in the transcript.
+- note: ONE short line (<=15 words) — the headline of what the speaker said about THIS instrument.
+- long_note: a fuller 2-5 sentence summary of everything the speaker said about THIS instrument \
+(reasoning, targets, price levels, concerns, results), grounded strictly in the transcript. If it \
+was only a passing mention, keep it brief — do not pad or invent.
 - conviction: integer 1-5 for how strongly the speaker pushes this view — 1 = passing/neutral \
 mention, 3 = a clear stated view, 5 = an emphatic high-conviction call. Neutral mentions are 1-2.
 - evidence must be grounded in the text, <=15 words.
@@ -156,6 +159,7 @@ def _extract_one(title, transcript_status, transcript_text, description):
             "action": m.get("action"),
             "conviction": m.get("conviction"),
             "note": m.get("note"),
+            "long_note": m.get("long_note"),
             "confidence": min(float(m.get("confidence", 0)), cap),
             "evidence": m.get("evidence"),
         })
