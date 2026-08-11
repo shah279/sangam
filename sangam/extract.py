@@ -1,37 +1,39 @@
 """Stage 3: transcript (or description fallback) -> structured mentions + a
-one-line summary, via Gemini 3.1 Flash-Lite with a strict JSON schema.
-
-Rules baked into the prompt:
-- Return an empty mentions list for non-financial content (promos, vlogs, warnings).
-- Ignore hashtags, smallcase/book plugs, and SEBI disclaimers — those are not calls.
-- Handle mixed Hindi/English/Hinglish and Devanagari.
-Description-only videos (no captions) run a conservative pass and are capped at a
-low confidence and tagged source='description'.
+grounded digest, via the Gemini REST API with httpx (no SDK, no compiled deps).
 """
 from __future__ import annotations
-
+import json
 import sys
 
-from pydantic import BaseModel
+import httpx
 
 from . import config, db, normalize
 
 ACTIONS = ["buy", "sell", "hold", "wait_for_dip", "radar", "future_opportunity", "neutral"]
 TYPES = ["stock", "mutual_fund", "sector"]
 
-
-class Mention(BaseModel):
-    raw_mention: str          # name exactly as referenced, e.g. "Reliance", "PSU banks"
-    instrument_type: str      # stock | mutual_fund | sector
-    action: str               # one of ACTIONS
-    confidence: float         # 0.0 - 1.0
-    evidence: str             # <=15-word quote/paraphrase justifying the action
-
-
-class Extraction(BaseModel):
-    summary: str              # one line; for non-financial videos, say what it is
-    mentions: list[Mention]
-
+# JSON schema handed to Gemini so it returns exactly this shape (no pydantic needed).
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "mentions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "raw_mention": {"type": "string"},
+                    "instrument_type": {"type": "string", "enum": TYPES},
+                    "action": {"type": "string", "enum": ACTIONS},
+                    "confidence": {"type": "number"},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["raw_mention", "instrument_type", "action", "confidence", "evidence"],
+            },
+        },
+    },
+    "required": ["summary", "mentions"],
+}
 
 SYSTEM = f"""You analyze transcripts of Indian finance YouTube videos. Language is \
 often mixed Hindi/English (Hinglish) and may be in Devanagari; names are sometimes \
@@ -53,30 +55,20 @@ return an EMPTY mentions list and say so in the summary.
 - NEVER treat hashtags (#nifty), smallcase/course/book plugs, channel names, or SEBI \
 disclaimers as mentions. Only count instruments the speaker actually discusses.
 - evidence must be grounded in the text, <=15 words.
-- Base EVERYTHING strictly on the transcript. Prefer specific names and figures
-  actually stated; never add outside knowledge or invent numbers.
-- summary: a faithful, detailed digest grounded ONLY in the transcript. Write a
-  2-3 sentence overview, then 3-6 bullet lines (each starting with "- ") covering:
-  the specific stocks/sectors discussed and what was said about each, any concrete
-  numbers actually mentioned (targets, valuations, growth %, price levels, results),
-  and the speaker's overall stance/takeaway. For a non-financial video, a single
-  line stating what it is is enough.
+- Base EVERYTHING strictly on the transcript. Prefer specific names and figures actually \
+stated; never add outside knowledge or invent numbers.
+- summary: a faithful, detailed digest grounded ONLY in the transcript. Write a 2-3 \
+sentence overview, then 3-6 bullet lines (each starting with "- ") covering the specific \
+stocks/sectors discussed and what was said about each, any concrete numbers actually \
+mentioned (targets, valuations, growth %, price levels, results), and the speaker's \
+overall stance. For a non-financial video, a single line stating what it is is enough.
 """
 
-
-def _client():
-    from google import genai
-    if not config.GEMINI_KEY:
-        raise RuntimeError("SANGAM_GEMINI_KEY is not set in .env")
-    return genai.Client(api_key=config.GEMINI_KEY)
-
-
 _RESOLVED_MODEL: str | None = None
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 def _model_candidates() -> list[str]:
-    """Configured model first, then cheap current fallbacks. Needed because the
-    ListModels method is often blocked on AI Studio keys, so we can't look one up."""
     out: list[str] = []
     for m in (config.GEMINI_MODEL, "gemini-flash-lite-latest", "gemini-2.5-flash-lite",
               "gemini-3-flash", "gemini-flash-latest"):
@@ -85,124 +77,121 @@ def _model_candidates() -> list[str]:
     return out
 
 
-def _make_config(use_thinking: bool):
-    from google.genai import types
-    kw = dict(
-        system_instruction=SYSTEM,
-        response_mime_type="application/json",
-        response_schema=Extraction,
-        temperature=0,
-    )
+def _body(text: str, use_thinking: bool) -> dict:
+    gen = {
+        "temperature": 0,
+        "responseMimeType": "application/json",
+        "responseSchema": RESPONSE_SCHEMA,
+    }
     if use_thinking:
-        kw["thinking_config"] = types.ThinkingConfig(thinking_budget=0)  # cheap: no thinking
-    return types.GenerateContentConfig(**kw)
+        gen["thinkingConfig"] = {"thinkingBudget": 0}   # cheap: no thinking
+    return {
+        "systemInstruction": {"parts": [{"text": SYSTEM}]},
+        "contents": [{"parts": [{"text": text}]}],
+        "generationConfig": gen,
+    }
 
 
-def _generate(client, text: str) -> Extraction:
-    """Call Gemini; auto-fall-back across model ids on NOT_FOUND, and drop
-    thinking_config if a model rejects it. Caches the first model that works."""
+def _post(model: str, text: str, use_thinking: bool) -> httpx.Response:
+    return httpx.post(
+        GEMINI_URL.format(model=model),
+        headers={"x-goog-api-key": config.GEMINI_KEY, "Content-Type": "application/json"},
+        json=_body(text, use_thinking), timeout=120,
+    )
+
+
+def _generate(text: str) -> dict:
+    """Call Gemini REST; fall back across model ids on 404, and drop thinkingConfig
+    if a model rejects it. Caches the first model that works. Returns a dict."""
     global _RESOLVED_MODEL
-    from google.genai import errors
+    if not config.GEMINI_KEY:
+        raise RuntimeError("SANGAM_GEMINI_KEY not set in .env")
     models = [_RESOLVED_MODEL] if _RESOLVED_MODEL else _model_candidates()
-    last_err = None
+    last = None
     for model in models:
-        try:
-            try:
-                resp = client.models.generate_content(model=model, contents=text, config=_make_config(True))
-            except errors.ClientError as e:
-                if e.code == 400 and "think" in str(e).lower():
-                    resp = client.models.generate_content(model=model, contents=text, config=_make_config(False))
-                else:
-                    raise
-            if _RESOLVED_MODEL != model:
-                _RESOLVED_MODEL = model
-                print(f"  (using model: {model})")
-            return resp.parsed
-        except errors.ClientError as e:
-            if e.code == 404 or getattr(e, "status", None) == "NOT_FOUND":
-                last_err = e
-                continue
-            raise
-    raise last_err
+        resp = _post(model, text, True)
+        if resp.status_code == 400 and "think" in resp.text.lower():
+            resp = _post(model, text, False)      # this model won't take thinkingConfig
+        if resp.status_code == 404:
+            last = resp                           # wrong model id -> try next candidate
+            continue
+        resp.raise_for_status()
+        if _RESOLVED_MODEL != model:
+            _RESOLVED_MODEL = model
+            print(f"  (using model: {model})")
+        data = resp.json()
+        parts = data["candidates"][0]["content"]["parts"]
+        raw = "".join(p["text"] for p in parts if "text" in p)   # skip thought parts
+        return json.loads(raw)
+    if last is not None:
+        last.raise_for_status()
+    raise RuntimeError("no model succeeded")
 
 
-def _extract_one(client, title, transcript_status, transcript_text, description):
-    """Returns (summary, mentions_list_of_dict, source) or (summary, [], None) to skip."""
+def _extract_one(title, transcript_status, transcript_text, description):
     if transcript_status == "done" and transcript_text:
         text = f"TITLE: {title}\n\nTRANSCRIPT:\n{transcript_text}"
-        source = "transcript"
-        cap = 1.0
+        source, cap = "transcript", 1.0
     elif description:
-        # No captions: conservative description-only pass, low confidence.
-        text = (
-            f"TITLE: {title}\n\nNOTE: No transcript available — only the video "
-            f"description below, which is promotional and low-trust. Extract only "
-            f"instruments EXPLICITLY named as discussed; be conservative.\n\n"
-            f"DESCRIPTION:\n{description}"
-        )
-        source = "description"
-        cap = config.DESC_ONLY_MAX_CONFIDENCE
+        text = (f"TITLE: {title}\n\nNOTE: No transcript available — only the promotional, "
+                f"low-trust description below. Extract only instruments EXPLICITLY named as "
+                f"discussed; be conservative.\n\nDESCRIPTION:\n{description}")
+        source, cap = "description", config.DESC_ONLY_MAX_CONFIDENCE
     else:
         return ("no transcript or description", [], None)
 
-    result = _generate(client, text)
+    result = _generate(text)
     rows = []
-    for m in result.mentions:
-        rows.append(
-            {
-                "raw_mention": m.raw_mention,
-                "resolved_symbol": normalize.resolve(m.raw_mention, m.instrument_type),
-                "instrument_type": m.instrument_type,
-                "action": m.action,
-                "confidence": min(float(m.confidence), cap),
-                "evidence": m.evidence,
-            }
-        )
-    return (result.summary, rows, source)
+    for m in result.get("mentions", []):
+        rows.append({
+            "raw_mention": m.get("raw_mention"),
+            "resolved_symbol": normalize.resolve(m.get("raw_mention", ""), m.get("instrument_type")),
+            "instrument_type": m.get("instrument_type"),
+            "action": m.get("action"),
+            "confidence": min(float(m.get("confidence", 0)), cap),
+            "evidence": m.get("evidence"),
+        })
+    return (result.get("summary", ""), rows, source)
 
 
 def run() -> int:
-    client = _client()
     total = 0
     with db.connect() as conn:
         pending = db.videos_needing_extract(conn)
 
     for video_id, title, tstatus, ttext, desc in pending:
         try:
-            summary, rows, source = _extract_one(client, title, tstatus, ttext, desc)
+            summary, rows, source = _extract_one(title, tstatus, ttext, desc)
         except Exception as e:
             with db.connect() as conn:
                 db.save_extraction(conn, video_id, None, "error")
             print(f"  extract ERROR: {title} -> {e}")
             continue
         with db.connect() as conn:
-            db.delete_mentions(conn, video_id)  # idempotent: safe to re-run extraction
+            db.delete_mentions(conn, video_id)      # idempotent: safe to re-run
             if source:
                 db.insert_mentions(conn, video_id, rows, source)
                 db.save_extraction(conn, video_id, summary, "done")
             else:
                 db.save_extraction(conn, video_id, summary, "skipped")
         total += len(rows)
-        tag = source or "skipped"
-        print(f"  [{tag}] {title} -> {len(rows)} mention(s) | {summary[:70]}")
+        print(f"  [{source or 'skipped'}] {title} -> {len(rows)} mention(s) | {summary[:70]}")
 
     print(f"extract: {total} mention(s) across {len(pending)} video(s)")
     return total
 
 
 def list_models():
-    """Best-effort: print model ids your key can use. ListModels is often blocked
-    on AI Studio keys — that's harmless, since extraction uses generateContent."""
+    """Best-effort model list (often blocked on AI Studio keys — harmless)."""
     try:
-        client = _client()
-        for m in client.models.list():
-            print(m.name)
+        r = httpx.get("https://generativelanguage.googleapis.com/v1beta/models",
+                      headers={"x-goog-api-key": config.GEMINI_KEY}, timeout=30)
+        r.raise_for_status()
+        for m in r.json().get("models", []):
+            print(m.get("name"))
     except Exception as e:
-        print("Could not list models (ListModels is often blocked on AI Studio keys):")
-        print(f"  {e}")
-        print("\nThat's fine — extraction uses generateContent, not ListModels.")
-        print(f"Just run:  python3 -m sangam.ingest extract   (default model: {config.GEMINI_MODEL})")
-        print("If a model id is wrong, extraction auto-tries fallbacks and prints the one that works.")
+        print(f"Could not list models (often blocked; harmless): {e}")
+        print(f"Just run extraction; it auto-falls-back. Default model: {config.GEMINI_MODEL}")
 
 
 if __name__ == "__main__":
