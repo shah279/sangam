@@ -128,3 +128,19 @@ def insert_mentions(conn, video_id, rows, source):
 def delete_mentions(conn, video_id):
     r = httpx.delete(_url("mentions"), headers=_headers(), params={"video_id": f"eq.{video_id}"}, timeout=30)
     r.raise_for_status()
+
+
+def get_channels(conn=None):
+    """Read the channel list FROM Supabase (the source of truth). Falls back to
+    selecting without the `active` filter if that column isn't there yet."""
+    base = {"select": "channel_id,name,handle,source_type,is_sebi_registered", "order": "name"}
+    try:
+        r = httpx.get(_url("channels"), headers=_headers(), params={**base, "active": "eq.true"}, timeout=30)
+        if r.status_code == 400:   # `active` column not added yet
+            r = httpx.get(_url("channels"), headers=_headers(), params=base, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPStatusError:
+        r = httpx.get(_url("channels"), headers=_headers(), params=base, timeout=30)
+        r.raise_for_status()
+        return r.json()

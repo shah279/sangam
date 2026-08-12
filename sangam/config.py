@@ -40,6 +40,7 @@ CHANNELS = [
     {"name": "Stock Market Ka Commando",       "channel_id": "UChneGqGy_lmvfcR1v_avL6g", "handle": "stockmarketcommando","source_type": "educator", "is_sebi_registered": False},
     {"name": "Rahul Jain",                     "channel_id": "UC2MU9phoTYy5sigZCkrvwiw", "handle": "torahulj",           "source_type": "research", "is_sebi_registered": True},
     {"name": "Stock 4 Retail by Umesh",        "channel_id": "UChcQR_Z7YmqRQMZ6lxjD8JA", "handle": "Stock4RetailbyUmesh","source_type": "educator", "is_sebi_registered": False},
+    {"name": "PaisaSmart",                     "channel_id": "UC6miSOTA9k33pwTE5Pd42zQ", "handle": "paisasmart",         "source_type": "research", "is_sebi_registered": True},
 ]
 
 

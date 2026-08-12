@@ -49,3 +49,6 @@ ALTER TABLE mentions ADD COLUMN IF NOT EXISTS source TEXT;  -- transcript | desc
 ALTER TABLE mentions ADD COLUMN IF NOT EXISTS note TEXT;
 ALTER TABLE mentions ADD COLUMN IF NOT EXISTS conviction INT;
 ALTER TABLE mentions ADD COLUMN IF NOT EXISTS long_note TEXT;
+
+-- Channel enable/disable flag (source of truth is this table)
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
