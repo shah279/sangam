@@ -102,8 +102,8 @@ def _body(text: str, use_thinking: bool) -> dict:
 
 
 def _post(model: str, text: str, use_thinking: bool) -> httpx.Response:
-    return httpx.post(
-        GEMINI_URL.format(model=model),
+    return db._do(
+        "POST", GEMINI_URL.format(model=model),
         headers={"x-goog-api-key": config.GEMINI_KEY, "Content-Type": "application/json"},
         json=_body(text, use_thinking), timeout=120,
     )

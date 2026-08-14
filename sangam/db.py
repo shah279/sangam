@@ -6,9 +6,30 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime
 
+import time
+
 import httpx
 
 from . import config
+
+# Transient network errors common on a phone (dropped Wi-Fi, DNS hiccup, slow reply).
+_TRANSIENT = (
+    httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+    httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError,
+)
+
+
+def _do(method: str, url: str, **kwargs):
+    """HTTP call with retry + backoff so a brief network blip doesn't crash the run."""
+    delay, last = 2.0, None
+    for _ in range(5):
+        try:
+            return httpx.request(method, url, **kwargs)
+        except _TRANSIENT as e:
+            last = e
+            time.sleep(delay)
+            delay = min(delay * 2, 20)
+    raise last
 
 
 def _headers(extra: dict | None = None) -> dict:
@@ -42,7 +63,7 @@ def init_schema():
     """Tables are created once via schema.sql in the Supabase SQL editor. Here we
     just verify connectivity and that the tables exist."""
     try:
-        r = httpx.get(_url("channels"), headers=_headers(), params={"limit": 1}, timeout=30)
+        r = _do("GET", _url("channels"), headers=_headers(), params={"limit": 1}, timeout=30)
         if r.status_code == 404:
             print("Tables missing — run schema.sql in the Supabase SQL editor first.")
         else:
@@ -58,14 +79,14 @@ def upsert_channels(conn, channels):
         {k: c[k] for k in ("channel_id", "name", "handle", "source_type", "is_sebi_registered")}
         for c in channels
     ]
-    r = httpx.post(_url("channels"), headers=_headers({"Prefer": "resolution=merge-duplicates"}),
+    r = _do("POST", _url("channels"), headers=_headers({"Prefer": "resolution=merge-duplicates"}),
                    json=body, timeout=30)
     r.raise_for_status()
 
 
 def insert_video_if_new(conn, video: dict) -> bool:
     payload = {k: _jsonable(v) for k, v in video.items()}
-    r = httpx.post(
+    r = _do("POST", 
         _url("videos"),
         headers=_headers({"Prefer": "resolution=ignore-duplicates,return=representation"}),
         json=payload, timeout=30,
@@ -75,7 +96,7 @@ def insert_video_if_new(conn, video: dict) -> bool:
 
 
 def videos_needing_captions(conn):
-    r = httpx.get(_url("videos"), headers=_headers(),
+    r = _do("GET", _url("videos"), headers=_headers(),
                   params={"transcript_status": "eq.pending", "select": "video_id,title",
                           "order": "published_at"}, timeout=30)
     r.raise_for_status()
@@ -83,14 +104,14 @@ def videos_needing_captions(conn):
 
 
 def save_transcript(conn, video_id, text, source, status):
-    r = httpx.patch(_url("videos"), headers=_headers(), params={"video_id": f"eq.{video_id}"},
+    r = _do("PATCH", _url("videos"), headers=_headers(), params={"video_id": f"eq.{video_id}"},
                     json={"transcript_text": text, "transcript_source": source,
                           "transcript_status": status}, timeout=30)
     r.raise_for_status()
 
 
 def videos_needing_extract(conn):
-    r = httpx.get(_url("videos"), headers=_headers(),
+    r = _do("GET", _url("videos"), headers=_headers(),
                   params={"extract_status": "eq.pending",
                           "select": "video_id,title,transcript_status,transcript_text,description",
                           "order": "published_at"}, timeout=30)
@@ -100,7 +121,7 @@ def videos_needing_extract(conn):
 
 
 def save_extraction(conn, video_id, summary, status):
-    r = httpx.patch(_url("videos"), headers=_headers(), params={"video_id": f"eq.{video_id}"},
+    r = _do("PATCH", _url("videos"), headers=_headers(), params={"video_id": f"eq.{video_id}"},
                     json={"summary": summary, "extract_status": status}, timeout=30)
     r.raise_for_status()
 
@@ -121,12 +142,12 @@ def insert_mentions(conn, video_id, rows, source):
         "evidence": r.get("evidence"),
         "source": source,
     } for r in rows]
-    resp = httpx.post(_url("mentions"), headers=_headers(), json=body, timeout=30)
+    resp = _do("POST", _url("mentions"), headers=_headers(), json=body, timeout=30)
     resp.raise_for_status()
 
 
 def delete_mentions(conn, video_id):
-    r = httpx.delete(_url("mentions"), headers=_headers(), params={"video_id": f"eq.{video_id}"}, timeout=30)
+    r = _do("DELETE", _url("mentions"), headers=_headers(), params={"video_id": f"eq.{video_id}"}, timeout=30)
     r.raise_for_status()
 
 
@@ -135,12 +156,12 @@ def get_channels(conn=None):
     selecting without the `active` filter if that column isn't there yet."""
     base = {"select": "channel_id,name,handle,source_type,is_sebi_registered", "order": "name"}
     try:
-        r = httpx.get(_url("channels"), headers=_headers(), params={**base, "active": "eq.true"}, timeout=30)
+        r = _do("GET", _url("channels"), headers=_headers(), params={**base, "active": "eq.true"}, timeout=30)
         if r.status_code == 400:   # `active` column not added yet
-            r = httpx.get(_url("channels"), headers=_headers(), params=base, timeout=30)
+            r = _do("GET", _url("channels"), headers=_headers(), params=base, timeout=30)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPStatusError:
-        r = httpx.get(_url("channels"), headers=_headers(), params=base, timeout=30)
+        r = _do("GET", _url("channels"), headers=_headers(), params=base, timeout=30)
         r.raise_for_status()
         return r.json()
