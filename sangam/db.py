@@ -13,10 +13,10 @@ import httpx
 from . import config
 
 # Transient network errors common on a phone (dropped Wi-Fi, DNS hiccup, slow reply).
-_TRANSIENT = (
-    httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
-    httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError,
-)
+# httpx.TransportError is the parent of every network-level failure — connect,
+# read/write, timeouts, protocol errors, and connection resets ([Errno 104]).
+_TRANSIENT = (httpx.TransportError,)
+_UA = {"User-Agent": "Mozilla/5.0 (compatible; SangamBot/1.0)"}
 
 
 def _do(method: str, url: str, **kwargs):
@@ -165,3 +165,9 @@ def get_channels(conn=None):
         r = _do("GET", _url("channels"), headers=_headers(), params=base, timeout=30)
         r.raise_for_status()
         return r.json()
+
+
+def fetch_feed(url: str) -> bytes:
+    """Fetch an RSS feed with the same retry/backoff as everything else, so a
+    dropped connection on a feed doesn't crash discovery."""
+    return _do("GET", url, headers=_UA, timeout=30).content

@@ -33,7 +33,11 @@ def discover(lookback_hours: int | None = None) -> int:
     print(f"discover: {len(channels)} channels")
     for ch in channels:
         for feed_url, is_short in config.feeds_for(ch["channel_id"]):
-            feed = feedparser.parse(feed_url)
+            try:
+                feed = feedparser.parse(db.fetch_feed(feed_url))
+            except Exception as err:
+                print(f"  ! feed failed for {ch['name']}: {err}")
+                continue
             for e in feed.entries:
                 pub = _published(e)
                 if not pub or pub < cutoff:

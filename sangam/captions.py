@@ -48,15 +48,19 @@ def run() -> int:
         pending = db.videos_needing_captions(conn)
 
     for video_id, title in pending:
-        text = fetch_caption(api, video_id)
-        with db.connect() as conn:
-            if text:
-                db.save_transcript(conn, video_id, text, "captions", "done")
-                done += 1
-                print(f"  captions: {title}  ({len(text)} chars)")
-            else:
-                db.save_transcript(conn, video_id, None, None, "none")
-                print(f"  no captions: {title}")
+        try:
+            text = fetch_caption(api, video_id)
+            with db.connect() as conn:
+                if text:
+                    db.save_transcript(conn, video_id, text, "captions", "done")
+                    done += 1
+                    print(f"  captions: {title}  ({len(text)} chars)")
+                else:
+                    db.save_transcript(conn, video_id, None, None, "none")
+                    print(f"  no captions: {title}")
+        except Exception as e:
+            print(f"  ! caption step failed for {title}: {e}")
+            continue
 
     print(f"captions: {done}/{len(pending)} transcribed")
     return done
