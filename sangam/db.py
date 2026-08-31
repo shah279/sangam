@@ -4,9 +4,12 @@ context manager so the other stages don't need changes; the `conn` arg is ignore
 """
 from __future__ import annotations
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
+import email.utils
+import random
 import time
+import uuid
 
 import httpx
 
@@ -16,19 +19,47 @@ from . import config
 # httpx.TransportError is the parent of every network-level failure — connect,
 # read/write, timeouts, protocol errors, and connection resets ([Errno 104]).
 _TRANSIENT = (httpx.TransportError,)
+_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; SangamBot/1.0)"}
 
 
-def _do(method: str, url: str, **kwargs):
-    """HTTP call with retry + backoff so a brief network blip doesn't crash the run."""
-    delay, last = 2.0, None
-    for _ in range(5):
+def _retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
         try:
-            return httpx.request(method, url, **kwargs)
+            parsed = email.utils.parsedate_to_datetime(value)
+            if parsed is None:
+                return None
+            return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+def _do(method: str, url: str, **kwargs):
+    """HTTP call with bounded retry for transport errors and transient statuses."""
+    delay, last = 2.0, None
+    for attempt in range(5):
+        try:
+            response = httpx.request(method, url, **kwargs)
         except _TRANSIENT as e:
             last = e
-            time.sleep(delay)
-            delay = min(delay * 2, 20)
+            if attempt == 4:
+                break
+        else:
+            if response.status_code not in _RETRYABLE_STATUS or attempt == 4:
+                return response
+            last = httpx.HTTPStatusError(
+                f"retryable HTTP {response.status_code}", request=response.request, response=response
+            )
+            retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+            if retry_after is not None:
+                delay = retry_after
+            response.close()
+        time.sleep(min(delay, 60) * random.uniform(0.8, 1.2))
+        delay = min(delay * 2, 20)
     raise last
 
 
@@ -60,23 +91,38 @@ def connect():
 
 
 def init_schema():
-    """Tables are created once via schema.sql in the Supabase SQL editor. Here we
-    just verify connectivity and that the tables exist."""
+    """Verify the checked-in schema contract; schema.sql must be applied separately."""
+    checks = {
+        "channels": "channel_id,platform,active",
+        "videos": (
+            "video_id,transcript_status,transcript_attempts,transcript_next_retry_at,"
+            "extract_status,extract_attempts,extract_next_retry_at"
+        ),
+        "mentions": "id,video_id,long_note,conviction,source",
+        "runs": "id,run_key,started_at,finished_at,status,new_videos,transcribed,mentions,error",
+    }
     try:
-        r = _do("GET", _url("channels"), headers=_headers(), params={"limit": 1}, timeout=30)
-        if r.status_code == 404:
-            print("Tables missing — run schema.sql in the Supabase SQL editor first.")
-        else:
+        for table, columns in checks.items():
+            r = _do("GET", _url(table), headers=_headers(),
+                    params={"select": columns, "limit": 0}, timeout=30)
             r.raise_for_status()
-            print("Supabase reachable; schema OK.")
     except Exception as e:
-        print(f"Supabase check failed: {e}")
-        raise
+        raise RuntimeError(
+            "Supabase credentials failed or the schema is outdated. Apply "
+            "sangam/schema.sql in the Supabase SQL editor, verify the server-side "
+            "URL/key, then run `python3 -m sangam.ingest init` again. "
+            f"Details: {e}"
+        ) from e
+    print("Supabase reachable; schema contract OK.")
 
 
 def upsert_channels(conn, channels):
     body = [
-        {k: c[k] for k in ("channel_id", "name", "handle", "source_type", "is_sebi_registered")}
+        {
+            **{k: c[k] for k in ("channel_id", "name", "handle", "source_type", "is_sebi_registered")},
+            "platform": c.get("platform", "youtube"),
+            "active": c.get("active", True),
+        }
         for c in channels
     ]
     r = _do("POST", _url("channels"), headers=_headers({"Prefer": "resolution=merge-duplicates"}),
@@ -96,78 +142,172 @@ def insert_video_if_new(conn, video: dict) -> bool:
 
 
 def videos_needing_captions(conn):
+    now = datetime.now(timezone.utc).isoformat()
     r = _do("GET", _url("videos"), headers=_headers(),
-                  params={"transcript_status": "eq.pending", "select": "video_id,title",
-                          "order": "published_at"}, timeout=30)
+                  params={
+                      "and": (
+                          "(or(transcript_status.eq.pending,transcript_status.eq.retry),"
+                          f"or(transcript_next_retry_at.is.null,transcript_next_retry_at.lte.{now}))"
+                      ),
+                      "select": "video_id,title,transcript_attempts",
+                      "order": "published_at",
+                  }, timeout=30)
     r.raise_for_status()
-    return [(row["video_id"], row["title"]) for row in r.json()]
+    return [(row["video_id"], row["title"], row.get("transcript_attempts") or 0)
+            for row in r.json()]
 
 
-def save_transcript(conn, video_id, text, source, status):
+def save_transcript(conn, video_id, text, source, status, *, attempts=None,
+                    error=None, next_retry_at=None):
+    body = {"transcript_text": text, "transcript_source": source,
+            "transcript_status": status, "transcript_last_error": error,
+            "transcript_next_retry_at": next_retry_at}
+    if attempts is not None:
+        body["transcript_attempts"] = attempts
     r = _do("PATCH", _url("videos"), headers=_headers(), params={"video_id": f"eq.{video_id}"},
-                    json={"transcript_text": text, "transcript_source": source,
-                          "transcript_status": status}, timeout=30)
+                    json=body, timeout=30)
     r.raise_for_status()
 
 
 def videos_needing_extract(conn):
+    now = datetime.now(timezone.utc).isoformat()
     r = _do("GET", _url("videos"), headers=_headers(),
-                  params={"extract_status": "eq.pending",
-                          "select": "video_id,title,transcript_status,transcript_text,description",
-                          "order": "published_at"}, timeout=30)
+                  params={
+                      "and": (
+                          "(or(extract_status.eq.pending,extract_status.eq.retry),"
+                          f"or(extract_next_retry_at.is.null,extract_next_retry_at.lte.{now}))"
+                      ),
+                      "transcript_status": "in.(done,unavailable,none,error)",
+                      "select": (
+                          "video_id,title,transcript_status,transcript_text,description,extract_attempts"
+                      ),
+                      "order": "published_at",
+                  }, timeout=30)
     r.raise_for_status()
-    return [(x["video_id"], x["title"], x["transcript_status"], x["transcript_text"], x["description"])
+    return [(x["video_id"], x["title"], x["transcript_status"], x["transcript_text"],
+             x["description"], x.get("extract_attempts") or 0)
             for x in r.json()]
 
 
-def save_extraction(conn, video_id, summary, status):
+def save_extraction(conn, video_id, summary, status, *, attempts=None,
+                    error=None, next_retry_at=None):
+    body = {"summary": summary, "extract_status": status,
+            "extract_last_error": error, "extract_next_retry_at": next_retry_at}
+    if attempts is not None:
+        body["extract_attempts"] = attempts
     r = _do("PATCH", _url("videos"), headers=_headers(), params={"video_id": f"eq.{video_id}"},
-                    json={"summary": summary, "extract_status": status}, timeout=30)
+                    json=body, timeout=30)
     r.raise_for_status()
 
 
-def insert_mentions(conn, video_id, rows, source):
-    if not rows:
-        return
-    body = [{
-        "video_id": video_id,
-        "raw_mention": r.get("raw_mention"),
-        "resolved_symbol": r.get("resolved_symbol"),
-        "instrument_type": r.get("instrument_type"),
-        "action": r.get("action"),
-        "conviction": r.get("conviction"),
-        "note": r.get("note"),
-        "long_note": r.get("long_note"),
-        "confidence": r.get("confidence"),
-        "evidence": r.get("evidence"),
-        "source": source,
-    } for r in rows]
-    resp = _do("POST", _url("mentions"), headers=_headers(), json=body, timeout=30)
-    resp.raise_for_status()
-
-
-def delete_mentions(conn, video_id):
-    r = _do("DELETE", _url("mentions"), headers=_headers(), params={"video_id": f"eq.{video_id}"}, timeout=30)
+def replace_extraction(conn, video_id, summary, rows, source, attempts):
+    """Atomically replace mentions and mark extraction done through a SQL RPC."""
+    payload = {
+        "p_video_id": video_id,
+        "p_summary": summary,
+        "p_source": source,
+        "p_mentions": rows,
+        "p_attempts": attempts,
+    }
+    r = _do("POST", f"{config.SUPABASE_URL}/rest/v1/rpc/replace_video_extraction",
+            headers=_headers(), json=payload, timeout=30)
     r.raise_for_status()
 
 
 def get_channels(conn=None):
-    """Read the channel list FROM Supabase (the source of truth). Falls back to
-    selecting without the `active` filter if that column isn't there yet."""
-    base = {"select": "channel_id,name,handle,source_type,is_sebi_registered", "order": "name"}
-    try:
-        r = _do("GET", _url("channels"), headers=_headers(), params={**base, "active": "eq.true"}, timeout=30)
-        if r.status_code == 400:   # `active` column not added yet
-            r = _do("GET", _url("channels"), headers=_headers(), params=base, timeout=30)
-        r.raise_for_status()
-        return r.json()
-    except httpx.HTTPStatusError:
-        r = _do("GET", _url("channels"), headers=_headers(), params=base, timeout=30)
-        r.raise_for_status()
-        return r.json()
+    """Read active channels from Supabase, the pipeline's source of truth."""
+    base = {
+        "select": "channel_id,name,handle,platform,source_type,is_sebi_registered,active",
+        "order": "name",
+    }
+    r = _do("GET", _url("channels"), headers=_headers(),
+            params={**base, "active": "eq.true"}, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 
 def fetch_feed(url: str) -> bytes:
     """Fetch an RSS feed with the same retry/backoff as everything else, so a
     dropped connection on a feed doesn't crash discovery."""
-    return _do("GET", url, headers=_UA, timeout=30).content
+    r = _do("GET", url, headers=_UA, timeout=30)
+    r.raise_for_status()
+    return r.content
+
+
+def discovery_watermarks() -> dict[tuple[str, bool], datetime]:
+    """Return the latest stored publish time per channel/feed stream."""
+    r = _do("POST", f"{config.SUPABASE_URL}/rest/v1/rpc/latest_stream_watermarks",
+            headers=_headers(), json={}, timeout=30)
+    r.raise_for_status()
+    latest: dict[tuple[str, bool], datetime] = {}
+    for row in r.json():
+        raw = row.get("published_at")
+        if not raw:
+            continue
+        published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        latest[(row["channel_id"], bool(row["is_short"]))] = published
+    return latest
+
+
+def retry_at(attempt: int) -> str:
+    minutes = min(config.RETRY_BASE_MINUTES * (2 ** max(0, attempt - 1)), 6 * 60)
+    return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+
+
+def start_run() -> int:
+    run_key = str(uuid.uuid4())
+    r = _do("POST", _url("runs"),
+            headers=_headers({"Prefer": "resolution=merge-duplicates,return=representation"}),
+            params={"on_conflict": "run_key"},
+            json={"run_key": run_key, "status": "running"}, timeout=30)
+    r.raise_for_status()
+    return int(r.json()[0]["id"])
+
+
+def finish_run(run_id: int, status: str, *, new_videos=0, transcribed=0,
+               mentions=0, error=None):
+    r = _do("PATCH", _url("runs"), headers=_headers(), params={"id": f"eq.{run_id}"},
+            json={"finished_at": datetime.now(timezone.utc).isoformat(), "status": status,
+                  "new_videos": new_videos, "transcribed": transcribed,
+                  "mentions": mentions, "error": error}, timeout=30)
+    r.raise_for_status()
+
+
+def requeue_failed() -> tuple[int, int]:
+    """Explicitly requeue terminal failures, including legacy ``none`` captions."""
+    headers = _headers({"Prefer": "return=representation"})
+    captions_response = _do(
+        "PATCH",
+        _url("videos"),
+        headers=headers,
+        params={"transcript_status": "in.(none,error)"},
+        json={
+            "transcript_status": "pending",
+            "transcript_attempts": 0,
+            "transcript_last_error": None,
+            "transcript_next_retry_at": None,
+            # A previous description-only extraction must be replaced if captions recover.
+            "extract_status": "pending",
+            "extract_attempts": 0,
+            "extract_last_error": None,
+            "extract_next_retry_at": None,
+        },
+        timeout=30,
+    )
+    captions_response.raise_for_status()
+
+    extract_response = _do(
+        "PATCH",
+        _url("videos"),
+        headers=headers,
+        params={"extract_status": "eq.error"},
+        json={
+            "extract_status": "pending",
+            "extract_attempts": 0,
+            "extract_last_error": None,
+            "extract_next_retry_at": None,
+        },
+        timeout=30,
+    )
+    extract_response.raise_for_status()
+    return len(captions_response.json()), len(extract_response.json())

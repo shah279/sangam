@@ -1,44 +1,79 @@
-# Sangam — ingest slice
+# Sangam
 
-Tracks 12 Indian finance YouTube channels. This first slice does **discover → captions →
-Supabase**: it polls each channel's long-form (UULF) and shorts (UUSH) RSS feeds, keeps
-videos from the last 24h, tags `is_short`, and stores each with its captions transcript.
-Extraction (Gemini) and the report come next.
+Sangam discovers recent uploads from Indian-finance YouTube channels, fetches the
+best Hindi/English caption track, extracts grounded instrument mentions with Gemini,
+and stores the results in Supabase. The Compose Multiplatform app is a read-only
+viewer for consensus, creators, video summaries, and pipeline health.
 
 ## Setup
 
-1. **Supabase**: create a project, open Project Settings → Database → Connection string,
-   copy the pooler URL.
-2. **Env**: `cp env.example.txt .env` and fill `SANGAM_DB_URL`. (`.env` is gitignored.)
-3. **Install**: `pip3 install -r requirements.txt`
-4. **Run**:
+1. Create a Supabase project.
+2. In the Supabase SQL editor, run the complete [`sangam/schema.sql`](sangam/schema.sql)
+   file. It is idempotent and contains the tables, retry fields, atomic extraction
+   functions, indexes, RLS, and read-only mobile policies.
+3. Copy the environment template and fill in the server-side credentials:
+
    ```bash
-   python3 -m sangam.ingest init       # create the tables (runs schema.sql)
-   python3 -m sangam.ingest            # discover + captions
+   cp env.example.txt .env
+   pip3 install -r requirements.txt
    ```
-   Or run stages separately: `... ingest discover` / `... ingest captions`.
 
-The `init` step also runs on every full run, so the tables self-create on first use.
+   `SANGAM_SUPABASE_KEY` must be a server-side secret/service-role key. Never put it
+   in the mobile app. The app uses its separate publishable anon key and can only
+   read because of the policies in `schema.sql`.
+4. Verify that the deployed database matches this code:
 
-## Day-one check (do this first)
+   ```bash
+   python3 -m sangam.ingest init
+   ```
 
-Captions from a datacenter IP can be throttled by YouTube. Test one video before
-trusting the pipeline:
+   `init` validates the schema; it does not execute SQL remotely.
+5. Run the complete pipeline:
+
+   ```bash
+   python3 -m sangam.ingest
+   ```
+
+## Commands
+
 ```bash
-python -c "from sangam.captions import _api, fetch_caption; print(fetch_caption(_api(),'A_KNOWN_VIDEO_ID')[:200])"
+python3 -m sangam.ingest discover  # RSS discovery only
+python3 -m sangam.ingest captions  # due caption work only
+python3 -m sangam.ingest extract   # due Gemini work only
+python3 -m sangam.ingest retry     # explicitly requeue terminal/legacy failures
+python3 -m sangam.channels list
+python3 -m sangam.channels add @channel_handle research yes
 ```
-If it returns text, you're clear. If it returns nothing on a video you *know* has
-captions, set `SANGAM_PROXY_URL` in `.env` to a proxy — no code change needed.
 
-## Notes
+Normal discovery resumes from each channel's most recent stored upload, with an
+overlap to avoid boundary gaps. A newly added channel uses `SANGAM_LOOKBACK_HOURS`.
+Recovery is still limited by how many items YouTube retains in each RSS feed, so use a
+larger initial lookback or a separate backfill source after a long outage.
 
-- `source_type` and `is_sebi_registered` in `config.py` are rough guesses from channel
-  descriptions — edit to your judgment. They only feed later weighting.
-- RSS `description` is often truncated; that's fine for MVP. Full text needs the Data API later.
-- Scheduling: run `discover`+`captions` on a systemd timer in the evening (post-market);
-  the extraction/report slice runs next morning.
+Caption and extraction outages are stored as `retry` with exponential backoff. After
+`SANGAM_MAX_STAGE_ATTEMPTS`, the item moves to `error` and requires the explicit
+`retry` command. Videos that genuinely cannot provide captions use `unavailable`, so
+description-only extraction can proceed without confusing an outage with absence.
 
-## Next slice
+A complete run writes a `runs` record and exits non-zero when any stage is partial or
+failed. This makes systemd and the app's Health screen reflect real failures.
 
-Extraction: transcript → Gemini 3.1 Flash-Lite → `mentions` rows + a `summary` field,
-then aggregate + Excel report.
+## Caption check
+
+Use a known public video before relying on a new host:
+
+```bash
+python3 -c "from sangam.captions import _api, fetch_caption; print(fetch_caption(_api(), 'VIDEO_ID')[:200])"
+```
+
+YouTube can block datacenter IPs. If that happens, configure `SANGAM_PROXY_URL`.
+
+## Tests
+
+```bash
+PYTHONPYCACHEPREFIX=/tmp/sangam-pycache python3 -m unittest discover -s tests -v
+```
+
+The next quality slice is instrument normalization plus a fixture-based extraction
+evaluation set. The Instagram design notes are in
+[`docs/instagram-phase3.md`](docs/instagram-phase3.md).

@@ -18,11 +18,32 @@ dist/
 .eggs/
 wheels/
 *.egg
+.venv/
+venv/
+
+# =======================
+# Gradle / Kotlin / Android
+# =======================
+.gradle/
+.kotlin/
+.konan/
+.cxx/
+.externalNativeBuild/
+captures/
+*.apk
+*.aab
+*.apks
+*.dex
+*.class
+*.hprof
 
 # =======================
 # Testing & Coverage
 # =======================
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
 .coverage
 htmlcov/
 .tox/
@@ -33,6 +54,8 @@ htmlcov/
 .DS_Store
 .vscode/
 .idea/
+*.iml
+*.log
 *.swp
 /.env
 /sangam.zip

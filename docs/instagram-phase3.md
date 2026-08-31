@@ -24,11 +24,14 @@ identical to YouTube:
 - Extraction (Gemini) → mentions + note/long_note/conviction
 - Normalization (NSE/AMFI)
 - Consensus + report
-- Supabase storage — just add a `platform` column ('youtube' | 'instagram')
+- Supabase storage and the read-only viewer. The current compatibility schema now
+  carries `platform`, but Phase 3 should introduce generic source accounts/content
+  items rather than forcing Instagram posts into YouTube-specific IDs and fields.
 
 Design as a pluggable **source adapter**: YouTube and Instagram both feed one shared
-core. Do NOT reimplement the pipeline in Kotlin — the Kotlin app stays a read-only
-*viewer* over Supabase.
+core. Separate creator identity from platform accounts, and store platform content in
+a generic content-item model. Do NOT reimplement the pipeline in Kotlin — the Kotlin
+app stays a read-only *viewer* over Supabase.
 
 ## What's genuinely harder (the front half)
 

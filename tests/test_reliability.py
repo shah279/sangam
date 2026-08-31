@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import Mock, patch
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import httpx
+
+from sangam import captions, db, discover, extract, ingest
+from sangam.outcome import StageResult
+
+
+class HttpRetryTests(unittest.TestCase):
+    @patch("sangam.db.random.uniform", return_value=1.0)
+    @patch("sangam.db.time.sleep")
+    @patch("sangam.db.httpx.request")
+    def test_retries_transient_http_status(self, request, sleep, _uniform):
+        req = httpx.Request("GET", "https://example.test/feed")
+        request.side_effect = [
+            httpx.Response(503, request=req),
+            httpx.Response(200, request=req, content=b"ok"),
+        ]
+
+        response = db._do("GET", str(req.url))
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, request.call_count)
+        sleep.assert_called_once()
+
+    @patch("sangam.db._do")
+    def test_feed_fetch_rejects_http_errors(self, do):
+        do.return_value = httpx.Response(
+            404, request=httpx.Request("GET", "https://example.test/feed")
+        )
+        with self.assertRaises(httpx.HTTPStatusError):
+            db.fetch_feed("https://example.test/feed")
+
+
+class CaptionStateTests(unittest.TestCase):
+    @patch("sangam.captions.db.save_transcript")
+    @patch("sangam.captions.db.retry_at", return_value="later")
+    @patch("sangam.captions.db.videos_needing_captions", return_value=[("v1", "Video", 0)])
+    @patch("sangam.captions.fetch_caption", side_effect=RuntimeError("blocked"))
+    @patch("sangam.captions._api")
+    def test_transient_caption_failure_is_retryable(
+        self, _api, _fetch, _pending, _retry_at, save
+    ):
+        result = captions.run()
+
+        self.assertFalse(result.ok)
+        save.assert_called_once_with(
+            None,
+            "v1",
+            None,
+            None,
+            "retry",
+            attempts=1,
+            error="blocked",
+            next_retry_at="later",
+        )
+
+    @patch("sangam.captions.db.save_transcript")
+    @patch("sangam.captions.db.videos_needing_captions", return_value=[("v1", "Video", 0)])
+    @patch("sangam.captions.fetch_caption", side_effect=captions.CaptionUnavailable("disabled"))
+    @patch("sangam.captions._api")
+    def test_permanent_caption_failure_is_unavailable(self, _api, _fetch, _pending, save):
+        result = captions.run()
+
+        self.assertTrue(result.ok)
+        save.assert_called_once_with(
+            None,
+            "v1",
+            None,
+            None,
+            "unavailable",
+            attempts=1,
+            error="disabled",
+        )
+
+    def test_caption_selection_prefers_configured_language(self):
+        class Track:
+            def __init__(self, language_code, generated, text):
+                self.language_code = language_code
+                self.is_generated = generated
+                self._text = text
+
+            def fetch(self):
+                fetched = Mock()
+                fetched.to_raw_data.return_value = [{"text": self._text}]
+                return fetched
+
+        api = Mock()
+        api.list.return_value = [
+            Track("fr", False, "French manual"),
+            Track("hi", True, "Hindi generated"),
+        ]
+
+        self.assertEqual("Hindi generated", captions.fetch_caption(api, "v1"))
+
+
+class DiscoveryStateTests(unittest.TestCase):
+    @patch("sangam.discover.db.insert_video_if_new", return_value=True)
+    @patch("sangam.discover.db.fetch_feed", return_value=b"feed")
+    @patch("sangam.discover.config.feeds_for", return_value=[("long", False), ("short", True)])
+    @patch("sangam.discover.db.get_channels", return_value=[{"channel_id": "c1", "name": "Creator"}])
+    def test_each_feed_uses_its_own_watermark(self, _channels, _feeds, _fetch, insert):
+        now = datetime.now(timezone.utc)
+        entry_time = now - timedelta(days=2)
+        entry = {
+            "id": "yt:v1",
+            "title": "Video",
+            "summary": "Description",
+            "link": "https://youtube.test/v1",
+        }
+        entry = SimpleNamespace(
+            **entry,
+            published_parsed=entry_time.utctimetuple(),
+            yt_videoid="v1",
+            get=lambda key, default=None: getattr(entry, key, default),
+        )
+        feed = SimpleNamespace(entries=[entry], bozo=False)
+
+        with patch("sangam.discover.db.discovery_watermarks", return_value={
+            ("c1", False): now - timedelta(days=3),
+            ("c1", True): now - timedelta(hours=1),
+        }), patch("sangam.discover.feedparser.parse", return_value=feed):
+            result = discover.discover()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(1, result.count)
+        insert.assert_called_once()
+
+
+class ExtractionStateTests(unittest.TestCase):
+    @patch("sangam.extract.normalize.resolve", return_value=None)
+    @patch("sangam.extract._generate")
+    def test_extraction_clamps_and_deduplicates_mentions(self, generate, _resolve):
+        mention = {
+            "raw_mention": " RIL ",
+            "instrument_type": "stock",
+            "action": "buy",
+            "conviction": 9,
+            "confidence": -1,
+            "note": "note",
+            "long_note": "long",
+            "evidence": "evidence",
+        }
+        generate.return_value = {"summary": " summary ", "mentions": [mention, mention]}
+
+        summary, rows, source = extract._extract_one("Video", "done", "text", None)
+
+        self.assertEqual("summary", summary)
+        self.assertEqual("transcript", source)
+        self.assertEqual(1, len(rows))
+        self.assertEqual(5, rows[0]["conviction"])
+        self.assertEqual(0.0, rows[0]["confidence"])
+
+    @patch("sangam.extract.db.save_extraction")
+    @patch("sangam.extract.db.retry_at", return_value="later")
+    @patch(
+        "sangam.extract.db.videos_needing_extract",
+        return_value=[("v1", "Video", "done", "text", "description", 0)],
+    )
+    @patch("sangam.extract._extract_one", side_effect=RuntimeError("quota"))
+    def test_transient_extraction_failure_is_retryable(
+        self, _extract, _pending, _retry_at, save
+    ):
+        result = extract.run()
+
+        self.assertFalse(result.ok)
+        save.assert_called_once_with(
+            None,
+            "v1",
+            None,
+            "retry",
+            attempts=1,
+            error="quota",
+            next_retry_at="later",
+        )
+
+    @patch("sangam.extract.db.save_extraction")
+    @patch("sangam.extract.db.replace_extraction")
+    @patch(
+        "sangam.extract.db.videos_needing_extract",
+        return_value=[("v1", "Video", "done", "text", "description", 1)],
+    )
+    @patch("sangam.extract._extract_one", return_value=("summary", [{"raw_mention": "RIL"}], "transcript"))
+    def test_success_uses_atomic_replacement(self, _extract, _pending, replace, save):
+        result = extract.run()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(1, result.count)
+        replace.assert_called_once_with(
+            None, "v1", "summary", [{"raw_mention": "RIL"}], "transcript", 2
+        )
+        save.assert_not_called()
+
+
+class RunHealthTests(unittest.TestCase):
+    @patch("sangam.ingest.db.finish_run")
+    @patch("sangam.ingest.db.start_run", return_value=42)
+    @patch("sangam.ingest.db.init_schema")
+    @patch("sangam.ingest.extract.run", return_value=StageResult("extract", 3, 1))
+    @patch(
+        "sangam.ingest.captions.run",
+        return_value=StageResult("captions", 1, 2, ["one blocked caption"]),
+    )
+    @patch("sangam.ingest.discover.discover", return_value=StageResult("discover", 2, 2))
+    def test_partial_run_is_recorded_and_reported(
+        self, _discover, _captions, _extract, _init, _start, finish
+    ):
+        result = ingest.run_all()
+
+        self.assertFalse(result.ok)
+        finish.assert_called_once_with(
+            42,
+            "partial",
+            new_videos=2,
+            transcribed=1,
+            mentions=3,
+            error="one blocked caption",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

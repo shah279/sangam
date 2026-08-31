@@ -8,6 +8,7 @@ import sys
 import httpx
 
 from . import config, db, normalize
+from .outcome import StageResult
 
 ACTIONS = ["buy", "sell", "hold", "wait_for_dip", "radar", "future_opportunity", "neutral"]
 TYPES = ["stock", "mutual_fund", "sector"]
@@ -151,46 +152,70 @@ def _extract_one(title, transcript_status, transcript_text, description):
 
     result = _generate(text)
     rows = []
+    seen = set()
     for m in result.get("mentions", []):
+        raw_mention = str(m.get("raw_mention") or "").strip()
+        instrument_type = m.get("instrument_type")
+        action = m.get("action")
+        if not raw_mention or instrument_type not in TYPES or action not in ACTIONS:
+            continue
+        key = (raw_mention.casefold(), instrument_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        conviction = max(1, min(5, int(m.get("conviction") or 1)))
+        confidence = max(0.0, min(float(m.get("confidence") or 0), cap, 1.0))
         rows.append({
-            "raw_mention": m.get("raw_mention"),
-            "resolved_symbol": normalize.resolve(m.get("raw_mention", ""), m.get("instrument_type")),
-            "instrument_type": m.get("instrument_type"),
-            "action": m.get("action"),
-            "conviction": m.get("conviction"),
+            "raw_mention": raw_mention,
+            "resolved_symbol": normalize.resolve(raw_mention, instrument_type),
+            "instrument_type": instrument_type,
+            "action": action,
+            "conviction": conviction,
             "note": m.get("note"),
             "long_note": m.get("long_note"),
-            "confidence": min(float(m.get("confidence", 0)), cap),
+            "confidence": confidence,
             "evidence": m.get("evidence"),
         })
-    return (result.get("summary", ""), rows, source)
+    return (str(result.get("summary") or "").strip(), rows, source)
 
 
-def run() -> int:
+def run() -> StageResult:
     total = 0
+    processed = 0
+    errors: list[str] = []
     with db.connect() as conn:
         pending = db.videos_needing_extract(conn)
 
-    for video_id, title, tstatus, ttext, desc in pending:
+    for video_id, title, tstatus, ttext, desc, previous_attempts in pending:
+        attempt = previous_attempts + 1
         try:
             summary, rows, source = _extract_one(title, tstatus, ttext, desc)
-        except Exception as e:
             with db.connect() as conn:
-                db.save_extraction(conn, video_id, None, "error")
-            print(f"  extract ERROR: {title} -> {e}")
+                if source:
+                    db.replace_extraction(conn, video_id, summary, rows, source, attempt)
+                else:
+                    db.save_extraction(conn, video_id, summary, "skipped", attempts=attempt)
+        except Exception as e:
+            terminal = attempt >= config.MAX_STAGE_ATTEMPTS
+            status = "error" if terminal else "retry"
+            next_retry = None if terminal else db.retry_at(attempt)
+            message = f"extract failed for {title} (attempt {attempt}): {e}"
+            errors.append(message)
+            try:
+                with db.connect() as conn:
+                    db.save_extraction(conn, video_id, None, status, attempts=attempt,
+                                       error=str(e), next_retry_at=next_retry)
+            except Exception as save_error:
+                errors.append(f"could not persist extraction failure for {title}: {save_error}")
+            print(f"  ! {message}; status={status}")
+            processed += 1
             continue
-        with db.connect() as conn:
-            db.delete_mentions(conn, video_id)      # idempotent: safe to re-run
-            if source:
-                db.insert_mentions(conn, video_id, rows, source)
-                db.save_extraction(conn, video_id, summary, "done")
-            else:
-                db.save_extraction(conn, video_id, summary, "skipped")
         total += len(rows)
+        processed += 1
         print(f"  [{source or 'skipped'}] {title} -> {len(rows)} mention(s) | {summary[:70]}")
 
-    print(f"extract: {total} mention(s) across {len(pending)} video(s)")
-    return total
+    print(f"extract: {total} mention(s) across {len(pending)} video(s); {len(errors)} error(s)")
+    return StageResult("extract", total, processed, errors)
 
 
 def list_models():
@@ -210,4 +235,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "models":
         list_models()
     else:
-        run()
+        raise SystemExit(0 if run().ok else 1)

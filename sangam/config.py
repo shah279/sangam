@@ -23,6 +23,9 @@ PROXY_URL = os.environ.get("SANGAM_PROXY_URL")
 
 # --- Settings ---
 LOOKBACK_HOURS = int(os.environ.get("SANGAM_LOOKBACK_HOURS", "24"))
+DISCOVERY_OVERLAP_HOURS = int(os.environ.get("SANGAM_DISCOVERY_OVERLAP_HOURS", "6"))
+MAX_STAGE_ATTEMPTS = int(os.environ.get("SANGAM_MAX_STAGE_ATTEMPTS", "5"))
+RETRY_BASE_MINUTES = int(os.environ.get("SANGAM_RETRY_BASE_MINUTES", "15"))
 RSS = "https://www.youtube.com/feeds/videos.xml?playlist_id={}"
 CAPTION_LANGS = ["hi", "en", "en-IN"]
 DESC_ONLY_MAX_CONFIDENCE = 0.4
