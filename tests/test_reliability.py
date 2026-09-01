@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import httpx
 
-from sangam import captions, db, discover, extract, ingest
+from sangam import captions, consensus, daily, db, discover, evaluate, extract, ingest, normalize
 from sangam.outcome import StageResult
 
 
@@ -115,6 +117,36 @@ class CaptionStateTests(unittest.TestCase):
             attempts=1,
             error="configure SANGAM_PROXY_URL",
             next_retry_at="later",
+        )
+
+    @patch("sangam.captions.db.save_transcript")
+    @patch(
+        "sangam.captions.db.videos_needing_captions",
+        return_value=[
+            ("v1", "Blocked", 1, None),
+            ("v2", "Private", 2, "The video is unplayable: This video is private"),
+        ],
+    )
+    @patch(
+        "sangam.captions.fetch_caption",
+        side_effect=captions.CaptionAccessBlocked("IP blocked"),
+    )
+    @patch("sangam.captions.db.retry_at", return_value="later")
+    @patch("sangam.captions._api")
+    def test_saved_private_failure_is_closed_before_host_block(
+        self, _api, _retry, fetch, _pending, save
+    ):
+        result = captions.run()
+
+        self.assertFalse(result.ok)
+        self.assertEqual(2, result.processed)
+        fetch.assert_called_once()
+        self.assertIn(
+            call(
+                None, "v2", None, None, "unavailable",
+                attempts=2, error="This video is private",
+            ),
+            save.call_args_list,
         )
 
     def test_caption_selection_prefers_configured_language(self):
@@ -248,7 +280,7 @@ class DiscoveryStateTests(unittest.TestCase):
 
 
 class ExtractionStateTests(unittest.TestCase):
-    @patch("sangam.extract.normalize.resolve", return_value=None)
+    @patch("sangam.extract.normalize.resolve_record", return_value=None)
     @patch("sangam.extract._generate")
     def test_extraction_clamps_and_deduplicates_mentions(self, generate, _resolve):
         mention = {
@@ -310,6 +342,82 @@ class ExtractionStateTests(unittest.TestCase):
             None, "v1", "summary", [{"raw_mention": "RIL"}], "transcript", 2
         )
         save.assert_not_called()
+
+
+class NormalizationTests(unittest.TestCase):
+    def test_aliases_merge_to_one_symbol(self):
+        self.assertEqual("RELIANCE", normalize.resolve("RIL", "stock"))
+        self.assertEqual("RELIANCE", normalize.resolve("Reliance Industries", "stock"))
+
+    def test_obvious_type_error_is_corrected(self):
+        result = normalize.resolve_record("Nifty 50", "stock")
+        self.assertIsNotNone(result)
+        self.assertEqual(("INDEX:NIFTY_50", "sector"), (result.symbol, result.instrument_type))
+
+    def test_ambiguous_and_generic_names_are_not_forced(self):
+        self.assertIsNone(normalize.resolve("Tata", "stock"))
+        self.assertIsNone(normalize.resolve("mutual funds", "mutual_fund"))
+
+    def test_snapshot_evaluation_meets_quality_gate(self):
+        metrics = evaluate.evaluate()
+
+        self.assertEqual([], metrics["failures"])
+        self.assertGreaterEqual(metrics["precision"], 0.9)
+        self.assertGreaterEqual(metrics["recall"], 0.9)
+
+
+class ConsensusAndDailyTests(unittest.TestCase):
+    @staticmethod
+    def _mention(channel, action, confidence, *, source="transcript", published="2026-09-01T08:00:00+00:00"):
+        return {
+            "id": hash((channel, action, confidence)),
+            "video_id": f"v-{channel}-{action}",
+            "raw_mention": "Reliance Industries",
+            "resolved_symbol": "RELIANCE",
+            "instrument_type": "stock",
+            "action": action,
+            "conviction": 4,
+            "confidence": confidence,
+            "source": source,
+            "note": f"{action} note",
+            "video": {
+                "channel_id": channel,
+                "published_at": published,
+                "channel": {"name": channel},
+            },
+        }
+
+    def test_consensus_weights_each_creator_once_and_excludes_description(self):
+        rows = [
+            self._mention("A", "buy", 0.7),
+            self._mention("A", "hold", 0.95),
+            self._mention("B", "sell", 0.8),
+            self._mention("C", "buy", 0.99, source="description"),
+        ]
+
+        item = consensus.build(rows)[0]
+
+        self.assertEqual(2, item["creator_count"])
+        self.assertEqual(3, item["mention_count"])
+        self.assertEqual({"hold": 1, "sell": 1}, item["action_counts"])
+
+    @patch("sangam.daily.render_video", return_value=None)
+    @patch("sangam.daily.db.recent_mentions_for_report")
+    def test_daily_package_contains_machine_and_human_outputs(self, recent, _render):
+        now = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
+        recent.return_value = [self._mention("A", "buy", 0.9)]
+        with TemporaryDirectory() as temp:
+            directory, video = daily.generate(
+                out_root=Path(temp), hours=24, max_items=5, now=now, min_creators=1
+            )
+
+            self.assertIsNone(video)
+            self.assertTrue((directory / "brief.json").exists())
+            brief = __import__("json").loads((directory / "brief.json").read_text())
+            self.assertEqual("RELIANCE", brief["items"][0]["name"])
+            self.assertTrue(brief["items"][0]["resolved"])
+            self.assertIn("RELIANCE", (directory / "brief.md").read_text())
+            self.assertIn("not investment advice", (directory / "captions.srt").read_text())
 
 
 class RunHealthTests(unittest.TestCase):

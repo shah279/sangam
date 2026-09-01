@@ -155,11 +155,12 @@ def videos_needing_captions(conn):
                           "(or(transcript_status.eq.pending,transcript_status.eq.retry),"
                           f"or(transcript_next_retry_at.is.null,transcript_next_retry_at.lte.{now}))"
                       ),
-                      "select": "video_id,title,transcript_attempts",
+                      "select": "video_id,title,transcript_attempts,transcript_last_error",
                       "order": "published_at",
                   }, timeout=30)
     r.raise_for_status()
-    return [(row["video_id"], row["title"], row.get("transcript_attempts") or 0)
+    return [(row["video_id"], row["title"], row.get("transcript_attempts") or 0,
+             row.get("transcript_last_error"))
             for row in r.json()]
 
 
@@ -218,6 +219,88 @@ def replace_extraction(conn, video_id, summary, rows, source, attempts):
     r = _do("POST", f"{config.SUPABASE_URL}/rest/v1/rpc/replace_video_extraction",
             headers=_headers(), json=payload, timeout=30)
     r.raise_for_status()
+
+
+def mentions_for_normalization() -> list[dict]:
+    """Read all mention identities in bounded pages, including existing mappings."""
+    rows: list[dict] = []
+    page_size = 1000
+    start = 0
+    while True:
+        r = _do(
+            "GET",
+            _url("mentions"),
+            headers=_headers({
+                "Range-Unit": "items",
+                "Range": f"{start}-{start + page_size - 1}",
+            }),
+            params={
+                "select": "id,raw_mention,resolved_symbol,instrument_type",
+                "order": "id",
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        page = r.json()
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        start += page_size
+
+
+def set_mention_normalizations(
+    conn, updates: dict[int, tuple[str, str]], chunk_size: int = 100
+) -> int:
+    """Batch mention updates by canonical symbol/type rather than one request per row."""
+    grouped: dict[tuple[str, str], list[int]] = {}
+    for mention_id, value in updates.items():
+        grouped.setdefault(value, []).append(mention_id)
+    changed = 0
+    for (symbol, instrument_type), ids in grouped.items():
+        for offset in range(0, len(ids), chunk_size):
+            chunk = ids[offset:offset + chunk_size]
+            r = _do(
+                "PATCH",
+                _url("mentions"),
+                headers=_headers(),
+                params={"id": f"in.({','.join(str(value) for value in chunk)})"},
+                json={"resolved_symbol": symbol, "instrument_type": instrument_type},
+                timeout=30,
+            )
+            r.raise_for_status()
+            changed += len(chunk)
+    return changed
+
+
+def recent_mentions_for_report(limit: int = 3000) -> list[dict]:
+    """Read recent mentions with creator/video context for daily consensus output."""
+    rows: list[dict] = []
+    page_size = min(1000, limit)
+    start = 0
+    select = (
+        "id,video_id,raw_mention,resolved_symbol,instrument_type,action,conviction,"
+        "confidence,note,long_note,evidence,source,"
+        "video:videos(title,url,published_at,channel_id,"
+        "channel:channels(name,source_type,is_sebi_registered,platform))"
+    )
+    while len(rows) < limit:
+        r = _do(
+            "GET",
+            _url("mentions"),
+            headers=_headers({
+                "Range-Unit": "items",
+                "Range": f"{start}-{start + page_size - 1}",
+            }),
+            params={"select": select, "order": "created_at.desc"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        page = r.json()
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        start += page_size
+    return rows[:limit]
 
 
 def get_channels(conn=None):

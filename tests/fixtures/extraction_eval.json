@@ -1,0 +1,108 @@
+[
+  {
+    "name": "stock alias dedupe",
+    "title": "Reliance view",
+    "text": "Reliance Industries looks attractive and I would buy RIL on dips.",
+    "model_output": {
+      "summary": "Bullish on Reliance.",
+      "mentions": [
+        {"raw_mention": "RIL", "instrument_type": "stock", "action": "hold", "conviction": 3, "confidence": 0.72},
+        {"raw_mention": "Reliance Industries", "instrument_type": "stock", "action": "buy", "conviction": 4, "confidence": 0.94}
+      ]
+    },
+    "expected": [
+      {"symbol": "RELIANCE", "instrument_type": "stock", "action": "buy"}
+    ]
+  },
+  {
+    "name": "index type correction",
+    "title": "Index outlook",
+    "text": "Nifty 50 remains on our radar.",
+    "model_output": {
+      "summary": "Watching Nifty.",
+      "mentions": [
+        {"raw_mention": "Nifty 50", "instrument_type": "stock", "action": "radar", "conviction": 2, "confidence": 0.9}
+      ]
+    },
+    "expected": [
+      {"symbol": "INDEX:NIFTY_50", "instrument_type": "sector", "action": "radar"}
+    ]
+  },
+  {
+    "name": "hinglish commodity",
+    "title": "सोना outlook",
+    "text": "सोना long term ke liye positive hai.",
+    "model_output": {
+      "summary": "Positive on gold.",
+      "mentions": [
+        {"raw_mention": "सोना", "instrument_type": "sector", "action": "future_opportunity", "conviction": 4, "confidence": 0.88}
+      ]
+    },
+    "expected": [
+      {"symbol": "COMMODITY:GOLD", "instrument_type": "sector", "action": "future_opportunity"}
+    ]
+  },
+  {
+    "name": "fund alias",
+    "title": "Flexi cap comparison",
+    "text": "Parag Parikh Flexi-cap Fund is still a hold.",
+    "model_output": {
+      "summary": "Holding the fund.",
+      "mentions": [
+        {"raw_mention": "Parag Parikh Flexi-cap Fund", "instrument_type": "mutual_fund", "action": "hold", "conviction": 3, "confidence": 0.91}
+      ]
+    },
+    "expected": [
+      {"symbol": "MF:PARAG_PARIKH_FLEXI_CAP", "instrument_type": "mutual_fund", "action": "hold"}
+    ]
+  },
+  {
+    "name": "generic product rejection",
+    "title": "SIP basics",
+    "text": "A SIP in mutual funds can build discipline.",
+    "model_output": {
+      "summary": "Generic education.",
+      "mentions": [
+        {"raw_mention": "SIP", "instrument_type": "mutual_fund", "action": "buy", "conviction": 2, "confidence": 0.8},
+        {"raw_mention": "mutual funds", "instrument_type": "mutual_fund", "action": "neutral", "conviction": 1, "confidence": 0.7}
+      ]
+    },
+    "expected": []
+  },
+  {
+    "name": "description confidence cap",
+    "title": "Daily update",
+    "text": "The description says HDFC Bank is discussed.",
+    "source": "description",
+    "model_output": {
+      "summary": "HDFC Bank appears in the description.",
+      "mentions": [
+        {"raw_mention": "HDFC Bank", "instrument_type": "stock", "action": "neutral", "conviction": 1, "confidence": 0.99}
+      ]
+    },
+    "expected": [
+      {"symbol": "HDFCBANK", "instrument_type": "stock", "action": "neutral", "max_confidence": 0.4}
+    ]
+  },
+  {
+    "name": "unknown specific retained",
+    "title": "Solar stock",
+    "text": "Vikram Solar remains a hold.",
+    "model_output": {
+      "summary": "Holding Vikram Solar.",
+      "mentions": [
+        {"raw_mention": "Vikram Solar", "instrument_type": "stock", "action": "hold", "conviction": 3, "confidence": 0.86}
+      ]
+    },
+    "expected": [
+      {"symbol": "RAW:vikram solar", "instrument_type": "stock", "action": "hold"}
+    ]
+  },
+  {
+    "name": "non financial empty",
+    "title": "Course announcement",
+    "text": "Enrollment closes tonight.",
+    "model_output": {"summary": "Course promotion.", "mentions": []},
+    "expected": []
+  }
+]

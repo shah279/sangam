@@ -5,13 +5,14 @@ scheduled at different times (systemd timers on the AWS box).
     python -m sangam.ingest discover
     python -m sangam.ingest captions
     python -m sangam.ingest extract
+    python -m sangam.ingest normalize  # backfill canonical instrument symbols
     python -m sangam.ingest retry      # requeue terminal/legacy failures
     python -m sangam.ingest init       # verify the deployed schema only
 """
 from __future__ import annotations
 import sys
 
-from . import db, discover, captions, extract
+from . import db, discover, captions, extract, normalize
 from .outcome import StageResult
 
 
@@ -67,6 +68,10 @@ def run_extract() -> StageResult:
     return extract.run()
 
 
+def run_normalize() -> StageResult:
+    return normalize.run()
+
+
 def retry_failed() -> StageResult:
     caption_count, extract_count = db.requeue_failed()
     print(f"requeued: {caption_count} caption item(s), {extract_count} extraction item(s)")
@@ -79,6 +84,7 @@ STAGES = {
     "discover": run_discover,
     "captions": run_captions,
     "extract": run_extract,
+    "normalize": run_normalize,
     "retry": retry_failed,
 }
 

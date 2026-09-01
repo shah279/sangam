@@ -37,5 +37,5 @@ can read. The app uses the ANON key only (never service_role).
 ## Screens
 Stocks (consensus) → Stock detail (take per creator) · Creators → Creator detail
 (their recommendations + recent videos) → Video detail (full digest + long notes) ·
-Health (last run, counts, failures + reason). Instagram-ready: creators carry a
+Health (last run, counts, failures, reason, and live backlog). Instagram-ready: creators carry a
 `platform` badge and no screen hardcodes YouTube.

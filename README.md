@@ -40,7 +40,11 @@ viewer for consensus, creators, video summaries, and pipeline health.
 python3 -m sangam.ingest discover  # RSS discovery only
 python3 -m sangam.ingest captions  # due caption work only
 python3 -m sangam.ingest extract   # due Gemini work only
+python3 -m sangam.ingest normalize # backfill reviewed canonical symbols/types
 python3 -m sangam.ingest retry     # explicitly requeue terminal/legacy failures
+python3 -m sangam.evaluate         # deterministic extraction quality gate
+python3 -m sangam.evaluate --live  # optional: re-run fixtures through Gemini
+python3 -m sangam.daily            # daily JSON/Markdown/narration/SRT (+ MP4 with ffmpeg)
 python3 -m sangam.channels list
 python3 -m sangam.channels add @channel_handle research yes
 ```
@@ -70,6 +74,25 @@ pending for a later run.
 A complete run writes a `runs` record and exits non-zero when any stage is partial or
 failed. This makes systemd and the app's Health screen reflect real failures.
 
+## Phase 2 quality and daily output
+
+Normalization uses a reviewed exact-alias catalog. It merges common company, index,
+sector, commodity, and mutual-fund variants while leaving ambiguous names unresolved;
+it intentionally does not fuzzy-match financial instruments. Run `normalize` once
+after updating the alias catalog to backfill existing mentions. New extractions are
+normalized before they are stored.
+
+Consensus excludes description-only and low-confidence mentions. A creator gets one
+weighted vote per instrument even when several of their videos repeat the same view.
+The app still shows the total mention count for transparency and its Health screen
+shows caption/extraction backlog counts alongside run history.
+
+`sangam.daily` writes a dated report package under `SANGAM_REPORT_DIR`: `brief.json`,
+`brief.md`, `narration.txt`, and `captions.srt`. If `ffmpeg` and a supported font are
+available, it also renders a silent text-first 1080x1920 `brief.mp4`. Narration is
+kept as a separate artifact so a preferred voice service can be added without
+coupling it to ingestion.
+
 ## Caption check
 
 Use a known public video before relying on a new host:
@@ -86,6 +109,5 @@ YouTube can block datacenter IPs. If that happens, configure `SANGAM_PROXY_URL`.
 PYTHONPYCACHEPREFIX=/tmp/sangam-pycache python3 -m unittest discover -s tests -v
 ```
 
-The next quality slice is instrument normalization plus a fixture-based extraction
-evaluation set. The Instagram design notes are in
+Phase 2 is complete. The Instagram design notes for Phase 3 are in
 [`docs/instagram-phase3.md`](docs/instagram-phase3.md).

@@ -48,6 +48,16 @@ def _unavailable_reason(error: Exception) -> str:
     return str(error).strip() or type(error).__name__
 
 
+def _saved_unavailable_reason(error: str | None) -> str | None:
+    """Recognize permanent failures saved before VideoUnplayable was classified."""
+    lowered = (error or "").casefold()
+    if "video is private" in lowered:
+        return "This video is private"
+    if "available to this channel's members" in lowered:
+        return "This video is available only to channel members"
+    return None
+
+
 def _api() -> YouTubeTranscriptApi:
     if config.PROXY_URL:
         return YouTubeTranscriptApi(
@@ -104,7 +114,23 @@ def run() -> StageResult:
     with db.connect() as conn:
         pending = db.videos_needing_captions(conn)
 
-    for video_id, title, previous_attempts in pending:
+    ready = []
+    for item in pending:
+        video_id, title, previous_attempts = item[:3]
+        previous_error = item[3] if len(item) > 3 else None
+        permanent_reason = _saved_unavailable_reason(previous_error)
+        if not permanent_reason:
+            ready.append((video_id, title, previous_attempts))
+            continue
+        with db.connect() as conn:
+            db.save_transcript(
+                conn, video_id, None, None, "unavailable",
+                attempts=previous_attempts, error=permanent_reason,
+            )
+        processed += 1
+        print(f"  no captions: {title} ({permanent_reason})")
+
+    for video_id, title, previous_attempts in ready:
         attempt = previous_attempts + 1
         try:
             text = fetch_caption(api, video_id)

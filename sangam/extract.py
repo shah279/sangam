@@ -151,23 +151,41 @@ def _extract_one(title, transcript_status, transcript_text, description):
         return ("no transcript or description", [], None)
 
     result = _generate(text)
-    rows = []
-    seen = set()
+    return (str(result.get("summary") or "").strip(), _rows_from_result(result, cap), source)
+
+
+def _rows_from_result(result: dict, confidence_cap: float = 1.0) -> list[dict]:
+    """Validate, canonicalize, and deduplicate one structured model response."""
+    rows_by_key: dict[tuple[str, str], dict] = {}
     for m in result.get("mentions", []):
         raw_mention = str(m.get("raw_mention") or "").strip()
         instrument_type = m.get("instrument_type")
         action = m.get("action")
-        if not raw_mention or instrument_type not in TYPES or action not in ACTIONS:
+        if (
+            not raw_mention
+            or normalize.is_generic(raw_mention)
+            or instrument_type not in TYPES
+            or action not in ACTIONS
+        ):
             continue
-        key = (raw_mention.casefold(), instrument_type)
-        if key in seen:
-            continue
-        seen.add(key)
-        conviction = max(1, min(5, int(m.get("conviction") or 1)))
-        confidence = max(0.0, min(float(m.get("confidence") or 0), cap, 1.0))
-        rows.append({
+        resolution = normalize.resolve_record(raw_mention, instrument_type)
+        if resolution:
+            instrument_type = resolution.instrument_type
+        symbol = resolution.symbol if resolution else None
+        dedupe_key = (symbol or normalize.key(raw_mention), instrument_type)
+        try:
+            conviction = int(m.get("conviction") or 1)
+        except (TypeError, ValueError):
+            conviction = 1
+        try:
+            confidence = float(m.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        conviction = max(1, min(5, conviction))
+        confidence = max(0.0, min(confidence, confidence_cap, 1.0))
+        row = {
             "raw_mention": raw_mention,
-            "resolved_symbol": normalize.resolve(raw_mention, instrument_type),
+            "resolved_symbol": symbol,
             "instrument_type": instrument_type,
             "action": action,
             "conviction": conviction,
@@ -175,8 +193,11 @@ def _extract_one(title, transcript_status, transcript_text, description):
             "long_note": m.get("long_note"),
             "confidence": confidence,
             "evidence": m.get("evidence"),
-        })
-    return (str(result.get("summary") or "").strip(), rows, source)
+        }
+        previous = rows_by_key.get(dedupe_key)
+        if previous is None or confidence > previous["confidence"]:
+            rows_by_key[dedupe_key] = row
+    return list(rows_by_key.values())
 
 
 def run() -> StageResult:

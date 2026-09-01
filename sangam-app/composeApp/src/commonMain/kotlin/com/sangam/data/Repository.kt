@@ -14,6 +14,21 @@ object Repository {
     suspend fun runs(): List<Run> =
         Supabase.select("runs", "select=*&order=id.desc&limit=40")
 
+    suspend fun health(): HealthSnapshot {
+        val states: List<PipelineState> =
+            Supabase.select("videos", "select=transcript_status,extract_status&limit=2000")
+        val queued = setOf("pending", "retry")
+        return HealthSnapshot(
+            runs = runs(),
+            totalVideos = states.size,
+            captionBacklog = states.count { it.transcriptStatus in queued },
+            extractionBacklog = states.count { it.extractStatus in queued },
+            terminalErrors = states.count {
+                it.transcriptStatus == "error" || it.extractStatus == "error"
+            },
+        )
+    }
+
     private const val TTL_MS = 120_000L
     private fun now() = Clock.System.now().toEpochMilliseconds()
     private var mentionsCache: Pair<Long, List<Mention>>? = null
@@ -45,7 +60,10 @@ object Repository {
 
     suspend fun mentionsForStock(name: String): List<Mention> {
         val n = name.encodeURLQueryComponent()
-        return Supabase.select<Mention>("mentions", "raw_mention=eq.$n&select=*,$MENTION_EMBED").latestFirst()
+        return Supabase.select<Mention>(
+            "mentions",
+            "or=(resolved_symbol.eq.$n,raw_mention.eq.$n)&select=*,$MENTION_EMBED"
+        ).latestFirst()
     }
 
     // Sort mentions newest-first by the source video's publish date.
@@ -74,22 +92,45 @@ object Repository {
     }
 }
 
+private val GENERIC_INSTRUMENT_MENTIONS = setOf(
+    "etf", "etfs", "index fund", "mutual fund", "mutual funds", "sip",
+    "stock market", "active etfs", "passive funds", "global etfs",
+)
+
 /** Pure: group mentions into a cross-creator consensus (call after date-filtering). */
 fun buildConsensus(mentions: List<Mention>): List<ConsensusItem> =
     mentions
-        .filter { !it.rawMention.isNullOrBlank() }
+        .filter {
+            !it.rawMention.isNullOrBlank() &&
+                it.rawMention.trim().lowercase() !in GENERIC_INSTRUMENT_MENTIONS &&
+                it.source != "description" &&
+                (it.confidence == null || it.confidence >= 0.55)
+        }
         .groupBy { (it.resolvedSymbol ?: it.rawMention!!).trim() to it.instrumentType }
         .map { (key, ms) ->
-            val convictions = ms.mapNotNull { it.conviction }
+            val creatorMentions = ms.groupBy {
+                it.video?.channelId ?: "video:${it.videoId}"
+            }.values.mapNotNull { creatorRows ->
+                creatorRows.maxWithOrNull(
+                    compareBy<Mention> { it.confidence ?: 0.0 }
+                        .thenBy { it.conviction ?: 0 }
+                        .thenBy {
+                            parseInstant(it.video?.publishedAt)?.toEpochMilliseconds() ?: 0L
+                        }
+                )
+            }
+            val convictions = creatorMentions.mapNotNull { it.conviction }
             ConsensusItem(
                 name = key.first,
                 instrumentType = key.second,
-                channels = ms.mapNotNull { it.video?.channelId }.distinct().size.coerceAtLeast(1),
+                channels = creatorMentions.size,
                 mentions = ms.size,
                 avgConviction = if (convictions.isEmpty()) 0.0 else convictions.average(),
                 topConviction = convictions.maxOrNull() ?: 0,
-                actionCounts = ms.mapNotNull { it.action }.groupingBy { it }.eachCount(),
-                sampleNote = ms.firstOrNull { !it.note.isNullOrBlank() }?.note,
+                actionCounts = creatorMentions.mapNotNull { it.action }.groupingBy { it }.eachCount(),
+                sampleNote = creatorMentions.maxByOrNull {
+                    parseInstant(it.video?.publishedAt)?.toEpochMilliseconds() ?: 0L
+                }?.note,
                 latestAt = ms.mapNotNull { it.video?.publishedAt }
                     .maxByOrNull { parseInstant(it)?.toEpochMilliseconds() ?: 0L },
             )

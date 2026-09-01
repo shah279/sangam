@@ -52,6 +52,7 @@ data class Mention(
     @SerialName("instrument_type") val instrumentType: String? = null,
     val action: String? = null,
     val conviction: Int? = null,
+    val confidence: Double? = null,
     val note: String? = null,
     @SerialName("long_note") val longNote: String? = null,
     val evidence: String? = null,
@@ -75,6 +76,20 @@ data class Run(
     val transcribed: Int? = 0,
     val mentions: Int? = 0,
     val error: String? = null,
+)
+
+@Serializable
+data class PipelineState(
+    @SerialName("transcript_status") val transcriptStatus: String? = null,
+    @SerialName("extract_status") val extractStatus: String? = null,
+)
+
+data class HealthSnapshot(
+    val runs: List<Run>,
+    val totalVideos: Int,
+    val captionBacklog: Int,
+    val extractionBacklog: Int,
+    val terminalErrors: Int,
 )
 
 data class ConsensusItem(

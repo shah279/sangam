@@ -30,6 +30,12 @@ YOUTUBE_FEED = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 YOUTUBE_VIDEOS_PAGE = "https://www.youtube.com/@{}/videos"
 CAPTION_LANGS = ["hi", "en", "en-IN"]
 DESC_ONLY_MAX_CONFIDENCE = 0.4
+CONSENSUS_MIN_CONFIDENCE = float(os.environ.get("SANGAM_CONSENSUS_MIN_CONFIDENCE", "0.55"))
+DAILY_REPORT_HOURS = int(os.environ.get("SANGAM_DAILY_REPORT_HOURS", "24"))
+DAILY_MAX_ITEMS = int(os.environ.get("SANGAM_DAILY_MAX_ITEMS", "8"))
+DAILY_MIN_CREATORS = int(os.environ.get("SANGAM_DAILY_MIN_CREATORS", "2"))
+REPORT_DIR = Path(os.environ.get("SANGAM_REPORT_DIR", str(ROOT / "reports")))
+FFMPEG_BIN = os.environ.get("SANGAM_FFMPEG_BIN", "ffmpeg")
 
 CHANNELS = [
     {"name": "Sahil Bhadviya",                 "channel_id": "UCdc6ObxhdQ8eZIFquU2xolA", "handle": "sahilbhadviya",      "source_type": "opinion",  "is_sebi_registered": False},

@@ -9,5 +9,6 @@ Type=oneshot
 User=ubuntu
 WorkingDirectory=/home/ubuntu/sangam
 ExecStart=/home/ubuntu/sangam/.venv/bin/python3 -m sangam.ingest
+ExecStart=/home/ubuntu/sangam/.venv/bin/python3 -m sangam.daily --out /home/ubuntu/sangam/reports
 # .env in WorkingDirectory is loaded automatically by python-dotenv.
 # Logs go to the journal: journalctl -u sangam-ingest

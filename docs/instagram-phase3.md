@@ -1,8 +1,8 @@
 # Sangam — Instagram (Phase 3)
 
-Reference note. Instagram is **phase 3**, after: YouTube automation (done, runs on
-the phone via cron), normalization + consensus report, and daily-video generation.
-Nothing here is built yet — this is the plan when we get to it.
+Reference note. Instagram is **phase 3**. Phase 2 now provides YouTube automation,
+reviewed normalization, creator-weighted consensus, health/backlog reporting, and a
+daily vertical-video artifact package. Instagram itself is not built yet.
 
 ## Why add it
 Widen coverage beyond the 12 YouTube channels, catching creators who are

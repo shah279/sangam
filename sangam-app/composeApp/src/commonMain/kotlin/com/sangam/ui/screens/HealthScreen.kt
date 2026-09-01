@@ -19,8 +19,9 @@ import com.sangam.ui.theme.SangamColors
 @Composable
 fun HealthScreen(nav: Navigator) {
     val listState = rememberLazyListState()
-    val state by loadState { Repository.runs() }
-    AsyncContent(state) { runs ->
+    val state by loadState { Repository.health() }
+    AsyncContent(state) { health ->
+        val runs = health.runs
         if (runs.isEmpty()) EmptyHint("No runs recorded yet.")
         else LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(vertical = 8.dp)) {
             item {
@@ -33,7 +34,22 @@ fun HealthScreen(nav: Navigator) {
                             style = MaterialTheme.typography.bodyMedium)
                         Text("${last.newVideos} new · ${last.transcribed} transcribed · ${last.mentions} mentions",
                             style = MaterialTheme.typography.bodySmall)
-                        last.error?.let { Text("Error: $it", style = MaterialTheme.typography.bodySmall, color = SangamColors.error) }
+                        last.error?.let { Text("Error: ${compactError(it)}", style = MaterialTheme.typography.bodySmall, color = SangamColors.error) }
+                    }
+                }
+            }
+            item {
+                Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Pipeline backlog", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Pill("${health.captionBacklog} captions", SangamColors.hold)
+                            Pill("${health.extractionBacklog} extractions", SangamColors.radar)
+                            if (health.terminalErrors > 0) {
+                                Pill("${health.terminalErrors} errors", SangamColors.error)
+                            }
+                        }
+                        Text("${health.totalVideos} videos tracked", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -56,10 +72,14 @@ private fun RunRow(r: Run) {
             Column {
                 Text("${r.newVideos} new · ${r.transcribed} transcribed · ${r.mentions} mentions",
                     style = MaterialTheme.typography.bodySmall)
-                r.error?.let { Text("Error: $it", style = MaterialTheme.typography.labelSmall, color = SangamColors.error) }
+                r.error?.let { Text("Error: ${compactError(it)}", style = MaterialTheme.typography.labelSmall, color = SangamColors.error) }
             }
         },
         trailingContent = { StatusPill(r.status) },
     )
     HorizontalDivider()
 }
+
+private fun compactError(error: String): String =
+    error.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.take(2)
+        .joinToString(" · ")
