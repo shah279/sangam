@@ -61,6 +61,8 @@ Caption and extraction outages are stored as `retry` with exponential backoff. A
 `SANGAM_MAX_STAGE_ATTEMPTS`, the item moves to `error` and requires the explicit
 `retry` command. Videos that genuinely cannot provide captions use `unavailable`, so
 description-only extraction can proceed without confusing an outage with absence.
+Private and members-only videos are also terminal `unavailable` items rather than
+retries.
 If YouTube blocks the current host/proxy, the caption stage stops after the first
 blocked request instead of repeating it across the backlog; the untouched items stay
 pending for a later run.

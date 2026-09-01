@@ -12,6 +12,7 @@ from youtube_transcript_api import (
     RequestBlocked,
     TranscriptsDisabled,
     VideoUnavailable,
+    VideoUnplayable,
     YouTubeTranscriptApi,
 )
 from youtube_transcript_api.proxies import GenericProxyConfig
@@ -34,8 +35,17 @@ _PERMANENT = (
     NoTranscriptFound,
     TranscriptsDisabled,
     VideoUnavailable,
+    VideoUnplayable,
 )
 _ACCESS_BLOCKED = (IpBlocked, RequestBlocked)
+
+
+def _unavailable_reason(error: Exception) -> str:
+    """Keep stored/UI errors concise, especially for private/member-only videos."""
+    if isinstance(error, VideoUnplayable):
+        details = [error.reason, *error.sub_reasons]
+        return "; ".join(str(detail).strip() for detail in details if detail) or "video unplayable"
+    return str(error).strip() or type(error).__name__
 
 
 def _api() -> YouTubeTranscriptApi:
@@ -65,7 +75,7 @@ def fetch_caption(api: YouTubeTranscriptApi, video_id: str) -> str:
             "or configure SANGAM_PROXY_URL"
         ) from e
     except _PERMANENT as e:
-        raise CaptionUnavailable(str(e)) from e
+        raise CaptionUnavailable(_unavailable_reason(e)) from e
     if not transcripts:
         raise CaptionUnavailable("no transcript tracks")
 
@@ -80,7 +90,7 @@ def fetch_caption(api: YouTubeTranscriptApi, video_id: str) -> str:
             "or configure SANGAM_PROXY_URL"
         ) from e
     except _PERMANENT as e:
-        raise CaptionUnavailable(str(e)) from e
+        raise CaptionUnavailable(_unavailable_reason(e)) from e
     if not text:
         raise CaptionUnavailable("empty transcript")
     return text

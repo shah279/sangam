@@ -274,10 +274,11 @@ def retry_at(attempt: int) -> str:
 
 def start_run() -> int:
     run_key = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).isoformat()
     r = _do("POST", _url("runs"),
             headers=_headers({"Prefer": "resolution=merge-duplicates,return=representation"}),
             params={"on_conflict": "run_key"},
-            json={"run_key": run_key, "status": "running"}, timeout=30)
+            json={"run_key": run_key, "started_at": started_at, "status": "running"}, timeout=30)
     r.raise_for_status()
     return int(r.json()[0]["id"])
 

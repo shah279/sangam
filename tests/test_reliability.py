@@ -78,6 +78,15 @@ class CaptionStateTests(unittest.TestCase):
             error="disabled",
         )
 
+    def test_private_video_is_permanently_unavailable(self):
+        api = Mock()
+        api.list.side_effect = captions.VideoUnplayable(
+            "v1", "This video is private", []
+        )
+
+        with self.assertRaisesRegex(captions.CaptionUnavailable, "video is private"):
+            captions.fetch_caption(api, "v1")
+
     @patch("sangam.captions.db.save_transcript")
     @patch("sangam.captions.db.retry_at", return_value="later")
     @patch(
@@ -304,6 +313,19 @@ class ExtractionStateTests(unittest.TestCase):
 
 
 class RunHealthTests(unittest.TestCase):
+    @patch("sangam.db._do")
+    def test_start_run_explicitly_writes_start_timestamp(self, do):
+        response = Mock()
+        response.json.return_value = [{"id": 7}]
+        do.return_value = response
+
+        self.assertEqual(7, db.start_run())
+
+        payload = do.call_args.kwargs["json"]
+        started_at = datetime.fromisoformat(payload["started_at"])
+        self.assertIsNotNone(started_at.tzinfo)
+        self.assertEqual("running", payload["status"])
+
     @patch("sangam.ingest.db.finish_run")
     @patch("sangam.ingest.db.start_run", return_value=42)
     @patch("sangam.ingest.db.init_schema")

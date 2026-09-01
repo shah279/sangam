@@ -12,7 +12,7 @@ object Repository {
         "video:videos(title,url,published_at,channel_id,channel:channels(name,source_type,is_sebi_registered,platform))"
 
     suspend fun runs(): List<Run> =
-        Supabase.select("runs", "select=*&order=finished_at.desc&limit=40")
+        Supabase.select("runs", "select=*&order=id.desc&limit=40")
 
     private const val TTL_MS = 120_000L
     private fun now() = Clock.System.now().toEpochMilliseconds()

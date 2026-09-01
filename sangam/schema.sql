@@ -100,6 +100,12 @@ UPDATE runs SET run_key = md5(random()::text || clock_timestamp()::text) WHERE r
 ALTER TABLE runs ALTER COLUMN run_key SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_run_key ON runs(run_key);
 
+-- Older deployments allowed null start times and did not preserve the default.
+-- Backfill with the best timestamp still available and repair the contract.
+ALTER TABLE runs ALTER COLUMN started_at SET DEFAULT now();
+UPDATE runs SET started_at = COALESCE(finished_at, now()) WHERE started_at IS NULL;
+ALTER TABLE runs ALTER COLUMN started_at SET NOT NULL;
+
 -- One transaction replaces an extraction, so a failed insert cannot erase good mentions.
 CREATE OR REPLACE FUNCTION public.replace_video_extraction(
     p_video_id TEXT,
