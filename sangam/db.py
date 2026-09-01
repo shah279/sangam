@@ -3,6 +3,7 @@ compiled dependencies (works cleanly on Termux). connect() is kept as a no-op
 context manager so the other stages don't need changes; the `conn` arg is ignored.
 """
 from __future__ import annotations
+import atexit
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +22,8 @@ from . import config
 _TRANSIENT = (httpx.TransportError,)
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; SangamBot/1.0)"}
+_CLIENT = httpx.Client()
+atexit.register(_CLIENT.close)
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
@@ -38,18 +41,18 @@ def _retry_after_seconds(value: str | None) -> float | None:
             return None
 
 
-def _do(method: str, url: str, **kwargs):
+def _do(method: str, url: str, *, max_attempts: int = 5, **kwargs):
     """HTTP call with bounded retry for transport errors and transient statuses."""
     delay, last = 2.0, None
-    for attempt in range(5):
+    for attempt in range(max_attempts):
         try:
-            response = httpx.request(method, url, **kwargs)
+            response = _CLIENT.request(method, url, **kwargs)
         except _TRANSIENT as e:
             last = e
-            if attempt == 4:
+            if attempt == max_attempts - 1:
                 break
         else:
-            if response.status_code not in _RETRYABLE_STATUS or attempt == 4:
+            if response.status_code not in _RETRYABLE_STATUS or attempt == max_attempts - 1:
                 return response
             last = httpx.HTTPStatusError(
                 f"retryable HTTP {response.status_code}", request=response.request, response=response
@@ -130,15 +133,18 @@ def upsert_channels(conn, channels):
     r.raise_for_status()
 
 
-def insert_video_if_new(conn, video: dict) -> bool:
-    payload = {k: _jsonable(v) for k, v in video.items()}
+def insert_videos_if_new(conn, videos: list[dict]) -> list[dict]:
+    """Insert a discovery batch and return only rows that were newly created."""
+    if not videos:
+        return []
+    payload = [{k: _jsonable(v) for k, v in video.items()} for video in videos]
     r = _do("POST", 
         _url("videos"),
         headers=_headers({"Prefer": "resolution=ignore-duplicates,return=representation"}),
         json=payload, timeout=30,
     )
     r.raise_for_status()
-    return len(r.json()) == 1   # rows actually inserted (empty if it was a duplicate)
+    return r.json()
 
 
 def videos_needing_captions(conn):
@@ -228,24 +234,36 @@ def get_channels(conn=None):
 
 def fetch_feed(url: str) -> bytes:
     """Fetch an RSS feed with the same retry/backoff as everything else, so a
-    dropped connection on a feed doesn't crash discovery."""
-    r = _do("GET", url, headers=_UA, timeout=30)
+    dropped connection on a feed doesn't crash discovery. Feed failures fall back
+    to the uploads page, so do not spend the full database retry budget here."""
+    r = _do("GET", url, headers=_UA, timeout=30, max_attempts=1)
     r.raise_for_status()
     return r.content
 
 
-def discovery_watermarks() -> dict[tuple[str, bool], datetime]:
-    """Return the latest stored publish time per channel/feed stream."""
+def fetch_youtube_page(url: str) -> bytes:
+    """Fetch a public YouTube page for the RSS discovery fallback."""
+    r = _do(
+        "GET", url, headers=_UA, timeout=30, follow_redirects=True, max_attempts=2
+    )
+    r.raise_for_status()
+    return r.content
+
+
+def discovery_watermarks() -> dict[str, datetime]:
+    """Return the latest stored publish time per channel."""
     r = _do("POST", f"{config.SUPABASE_URL}/rest/v1/rpc/latest_stream_watermarks",
             headers=_headers(), json={}, timeout=30)
     r.raise_for_status()
-    latest: dict[tuple[str, bool], datetime] = {}
+    latest: dict[str, datetime] = {}
     for row in r.json():
         raw = row.get("published_at")
         if not raw:
             continue
         published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        latest[(row["channel_id"], bool(row["is_short"]))] = published
+        channel_id = row["channel_id"]
+        if channel_id not in latest or published > latest[channel_id]:
+            latest[channel_id] = published
     return latest
 
 

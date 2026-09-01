@@ -45,15 +45,25 @@ python3 -m sangam.channels list
 python3 -m sangam.channels add @channel_handle research yes
 ```
 
+The complete pipeline validates the schema before it starts. Individual stage
+commands skip that repeated check for faster debugging; run `init` explicitly after
+changing `schema.sql` or credentials.
+
 Normal discovery resumes from each channel's most recent stored upload, with an
 overlap to avoid boundary gaps. A newly added channel uses `SANGAM_LOOKBACK_HOURS`.
-Recovery is still limited by how many items YouTube retains in each RSS feed, so use a
-larger initial lookback or a separate backfill source after a long outage.
+It polls one canonical RSS feed per channel and batch-inserts results. When YouTube's
+RSS service returns an error, discovery falls back to the channel's public long-form
+uploads page. Recovery is still limited by how many items YouTube exposes in those
+sources, so use a larger initial lookback or a separate backfill source after a long
+outage.
 
 Caption and extraction outages are stored as `retry` with exponential backoff. After
 `SANGAM_MAX_STAGE_ATTEMPTS`, the item moves to `error` and requires the explicit
 `retry` command. Videos that genuinely cannot provide captions use `unavailable`, so
 description-only extraction can proceed without confusing an outage with absence.
+If YouTube blocks the current host/proxy, the caption stage stops after the first
+blocked request instead of repeating it across the backlog; the untouched items stay
+pending for a later run.
 
 A complete run writes a `runs` record and exits non-zero when any stage is partial or
 failed. This makes systemd and the app's Health screen reflect real failures.

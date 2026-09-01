@@ -6,8 +6,10 @@ set SANGAM_PROXY_URL in .env — no code change needed."""
 from __future__ import annotations
 from youtube_transcript_api import (
     AgeRestricted,
+    IpBlocked,
     InvalidVideoId,
     NoTranscriptFound,
+    RequestBlocked,
     TranscriptsDisabled,
     VideoUnavailable,
     YouTubeTranscriptApi,
@@ -22,6 +24,10 @@ class CaptionUnavailable(RuntimeError):
     """The video cannot provide captions through this adapter; do not retry it."""
 
 
+class CaptionAccessBlocked(RuntimeError):
+    """The current host/proxy is blocked, so the whole caption batch should pause."""
+
+
 _PERMANENT = (
     AgeRestricted,
     InvalidVideoId,
@@ -29,6 +35,7 @@ _PERMANENT = (
     TranscriptsDisabled,
     VideoUnavailable,
 )
+_ACCESS_BLOCKED = (IpBlocked, RequestBlocked)
 
 
 def _api() -> YouTubeTranscriptApi:
@@ -52,6 +59,11 @@ def fetch_caption(api: YouTubeTranscriptApi, video_id: str) -> str:
     """Return the best transcript, raising for unavailable and retryable failures."""
     try:
         transcripts = list(api.list(video_id))
+    except _ACCESS_BLOCKED as e:
+        raise CaptionAccessBlocked(
+            "YouTube blocked caption requests from this IP; wait for the retry window "
+            "or configure SANGAM_PROXY_URL"
+        ) from e
     except _PERMANENT as e:
         raise CaptionUnavailable(str(e)) from e
     if not transcripts:
@@ -62,6 +74,11 @@ def fetch_caption(api: YouTubeTranscriptApi, video_id: str) -> str:
     try:
         raw = chosen.fetch().to_raw_data()   # list of {'text','start','duration'}
         text = " ".join(d["text"] for d in raw).strip()
+    except _ACCESS_BLOCKED as e:
+        raise CaptionAccessBlocked(
+            "YouTube blocked caption requests from this IP; wait for the retry window "
+            "or configure SANGAM_PROXY_URL"
+        ) from e
     except _PERMANENT as e:
         raise CaptionUnavailable(str(e)) from e
     if not text:
@@ -90,6 +107,27 @@ def run() -> StageResult:
                 db.save_transcript(conn, video_id, None, None, "unavailable",
                                    attempts=attempt, error=str(e))
             print(f"  no captions: {title} ({e})")
+        except CaptionAccessBlocked as e:
+            next_retry = db.retry_at(attempt)
+            message = f"caption access blocked while processing {title}: {e}"
+            errors.append(message)
+            try:
+                with db.connect() as conn:
+                    db.save_transcript(
+                        conn,
+                        video_id,
+                        None,
+                        None,
+                        "retry",
+                        attempts=attempt,
+                        error=str(e),
+                        next_retry_at=next_retry,
+                    )
+            except Exception as save_error:
+                errors.append(f"could not persist caption failure for {title}: {save_error}")
+            processed += 1
+            print(f"  ! {message}; paused remaining caption work")
+            break
         except Exception as e:
             terminal = attempt >= config.MAX_STAGE_ATTEMPTS
             status = "error" if terminal else "retry"

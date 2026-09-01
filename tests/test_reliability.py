@@ -14,7 +14,7 @@ from sangam.outcome import StageResult
 class HttpRetryTests(unittest.TestCase):
     @patch("sangam.db.random.uniform", return_value=1.0)
     @patch("sangam.db.time.sleep")
-    @patch("sangam.db.httpx.request")
+    @patch("sangam.db._CLIENT.request")
     def test_retries_transient_http_status(self, request, sleep, _uniform):
         req = httpx.Request("GET", "https://example.test/feed")
         request.side_effect = [
@@ -78,6 +78,36 @@ class CaptionStateTests(unittest.TestCase):
             error="disabled",
         )
 
+    @patch("sangam.captions.db.save_transcript")
+    @patch("sangam.captions.db.retry_at", return_value="later")
+    @patch(
+        "sangam.captions.db.videos_needing_captions",
+        return_value=[("v1", "First", 0), ("v2", "Second", 0)],
+    )
+    @patch(
+        "sangam.captions.fetch_caption",
+        side_effect=captions.CaptionAccessBlocked("configure SANGAM_PROXY_URL"),
+    )
+    @patch("sangam.captions._api")
+    def test_host_block_pauses_remaining_caption_batch(
+        self, _api, fetch, _pending, _retry_at, save
+    ):
+        result = captions.run()
+
+        self.assertFalse(result.ok)
+        self.assertEqual(1, result.processed)
+        fetch.assert_called_once()
+        save.assert_called_once_with(
+            None,
+            "v1",
+            None,
+            None,
+            "retry",
+            attempts=1,
+            error="configure SANGAM_PROXY_URL",
+            next_retry_at="later",
+        )
+
     def test_caption_selection_prefers_configured_language(self):
         class Track:
             def __init__(self, language_code, generated, text):
@@ -100,11 +130,16 @@ class CaptionStateTests(unittest.TestCase):
 
 
 class DiscoveryStateTests(unittest.TestCase):
-    @patch("sangam.discover.db.insert_video_if_new", return_value=True)
+    @patch(
+        "sangam.discover.db.insert_videos_if_new",
+        side_effect=lambda _conn, videos: videos,
+    )
     @patch("sangam.discover.db.fetch_feed", return_value=b"feed")
-    @patch("sangam.discover.config.feeds_for", return_value=[("long", False), ("short", True)])
+    @patch("sangam.discover.config.feeds_for", return_value=["canonical"])
     @patch("sangam.discover.db.get_channels", return_value=[{"channel_id": "c1", "name": "Creator"}])
-    def test_each_feed_uses_its_own_watermark(self, _channels, _feeds, _fetch, insert):
+    def test_canonical_feed_uses_channel_watermark_and_batch_insert(
+        self, _channels, feeds, fetch, insert
+    ):
         now = datetime.now(timezone.utc)
         entry_time = now - timedelta(days=2)
         entry = {
@@ -121,14 +156,85 @@ class DiscoveryStateTests(unittest.TestCase):
         )
         feed = SimpleNamespace(entries=[entry], bozo=False)
 
-        with patch("sangam.discover.db.discovery_watermarks", return_value={
-            ("c1", False): now - timedelta(days=3),
-            ("c1", True): now - timedelta(hours=1),
-        }), patch("sangam.discover.feedparser.parse", return_value=feed):
+        with patch(
+            "sangam.discover.db.discovery_watermarks",
+            return_value={"c1": now - timedelta(days=3)},
+        ), patch("sangam.discover.feedparser.parse", return_value=feed):
             result = discover.discover()
 
         self.assertTrue(result.ok)
         self.assertEqual(1, result.count)
+        feeds.assert_called_once_with("c1")
+        fetch.assert_called_once_with("canonical")
+        insert.assert_called_once()
+
+    def test_short_classification_uses_feed_metadata_hints(self):
+        regular = {"link": "https://youtube.test/watch?v=v1", "title": "Video"}
+        short = {
+            "link": "https://youtube.test/watch?v=v2",
+            "title": "Quick update #Shorts",
+        }
+
+        self.assertFalse(discover._looks_short(regular))
+        self.assertTrue(discover._looks_short(short))
+
+    def test_uploads_page_parser_reads_current_lockup_shape(self):
+        now = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
+        initial_data = {
+            "contents": [{
+                "lockupViewModel": {
+                    "contentId": "v1",
+                    "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+                    "metadata": {"lockupMetadataViewModel": {
+                        "title": {"content": "Market update"},
+                        "metadata": {"contentMetadataViewModel": {
+                            "metadataRows": [{"metadataParts": [
+                                {"text": {"content": "100 views"}},
+                                {"text": {"content": "5 hours ago"}},
+                            ]}]
+                        }},
+                    }},
+                }
+            }]
+        }
+        page = f"<script>var ytInitialData = {__import__('json').dumps(initial_data)};</script>"
+
+        with patch("sangam.discover.db.fetch_youtube_page", return_value=page.encode()):
+            entries = discover._uploads_page_entries("creator", now)
+
+        self.assertEqual(1, len(entries))
+        self.assertEqual("v1", entries[0]["video_id"])
+        self.assertEqual(now - timedelta(hours=5), entries[0]["published_at"])
+
+    @patch(
+        "sangam.discover.db.insert_videos_if_new",
+        side_effect=lambda _conn, videos: videos,
+    )
+    @patch("sangam.discover._uploads_page_entries")
+    @patch("sangam.discover.db.fetch_feed", side_effect=RuntimeError("RSS down"))
+    @patch("sangam.discover.config.feeds_for", return_value=["canonical"])
+    @patch(
+        "sangam.discover.db.get_channels",
+        return_value=[{"channel_id": "c1", "name": "Creator", "handle": "creator"}],
+    )
+    def test_rss_failure_uses_uploads_page_without_failing_stage(
+        self, _channels, _feeds, _fetch, fallback, insert
+    ):
+        now = datetime.now(timezone.utc)
+        fallback.return_value = [{
+            "video_id": "v1",
+            "title": "Video",
+            "summary": None,
+            "link": "https://youtube.test/watch?v=v1",
+            "published_at": now - timedelta(hours=1),
+            "is_short": False,
+        }]
+        with patch("sangam.discover.db.discovery_watermarks", return_value={}):
+            result = discover.discover()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(1, result.count)
+        fallback.assert_called_once()
         insert.assert_called_once()
 
 

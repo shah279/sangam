@@ -56,22 +56,18 @@ def run_all() -> StageResult:
 
 
 def run_discover() -> StageResult:
-    db.init_schema()
     return discover.discover()
 
 
 def run_captions() -> StageResult:
-    db.init_schema()
     return captions.run()
 
 
 def run_extract() -> StageResult:
-    db.init_schema()
     return extract.run()
 
 
 def retry_failed() -> StageResult:
-    db.init_schema()
     caption_count, extract_count = db.requeue_failed()
     print(f"requeued: {caption_count} caption item(s), {extract_count} extraction item(s)")
     return StageResult("retry", caption_count + extract_count, caption_count + extract_count)

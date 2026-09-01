@@ -26,7 +26,8 @@ LOOKBACK_HOURS = int(os.environ.get("SANGAM_LOOKBACK_HOURS", "24"))
 DISCOVERY_OVERLAP_HOURS = int(os.environ.get("SANGAM_DISCOVERY_OVERLAP_HOURS", "6"))
 MAX_STAGE_ATTEMPTS = int(os.environ.get("SANGAM_MAX_STAGE_ATTEMPTS", "5"))
 RETRY_BASE_MINUTES = int(os.environ.get("SANGAM_RETRY_BASE_MINUTES", "15"))
-RSS = "https://www.youtube.com/feeds/videos.xml?playlist_id={}"
+YOUTUBE_FEED = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
+YOUTUBE_VIDEOS_PAGE = "https://www.youtube.com/@{}/videos"
 CAPTION_LANGS = ["hi", "en", "en-IN"]
 DESC_ONLY_MAX_CONFIDENCE = 0.4
 
@@ -47,6 +48,6 @@ CHANNELS = [
 ]
 
 
-def feeds_for(channel_id: str) -> list[tuple[str, bool]]:
-    base = channel_id[2:]
-    return [(RSS.format("UULF" + base), False), (RSS.format("UUSH" + base), True)]
+def feeds_for(channel_id: str) -> list[str]:
+    """Return YouTube's canonical combined upload feed for a channel."""
+    return [YOUTUBE_FEED.format(channel_id)]
