@@ -40,8 +40,10 @@ viewer for consensus, creators, video summaries, and pipeline health.
 python3 -m sangam.ingest discover  # RSS discovery only
 python3 -m sangam.ingest captions  # due caption work only
 python3 -m sangam.ingest extract   # due Gemini work only
-python3 -m sangam.ingest normalize # backfill reviewed canonical symbols/types
-python3 -m sangam.ingest retry     # explicitly requeue terminal/legacy failures
+python3 -m sangam.ingest normalize   # backfill reviewed canonical symbols/types
+python3 -m sangam.ingest unresolved  # list unresolved stock names worth a curated alias
+python3 -m sangam.ingest prices      # fetch/backfill EOD closes for resolved stock symbols
+python3 -m sangam.ingest retry       # explicitly requeue terminal/legacy failures
 python3 -m sangam.evaluate         # deterministic extraction quality gate
 python3 -m sangam.evaluate --live  # optional: re-run fixtures through Gemini
 python3 -m sangam.daily            # daily JSON/Markdown/narration/SRT (+ MP4 with ffmpeg)

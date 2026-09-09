@@ -305,5 +305,43 @@ def run() -> StageResult:
     return StageResult("normalize", changed, len(rows))
 
 
+def unresolved_report(rows: list[dict], min_count: int = 2) -> list[dict]:
+    """Group still-unresolved stock mentions by normalized text, most frequent
+    first — the safety net for names this module deliberately declines to
+    guess (mishearings, incomplete names not caught by any source). One-off
+    counts are omitted by default: a single occurrence is usually noise (an
+    ASR fluke, a rare small-cap) rather than something worth a curated alias.
+    """
+    groups: dict[str, dict] = {}
+    for row in rows:
+        if row.get("resolved_symbol") or row.get("instrument_type") != "stock":
+            continue
+        raw = (row.get("raw_mention") or "").strip()
+        if not raw or is_generic(raw):
+            continue
+        entry = groups.setdefault(key(raw), {"raw_mention": raw, "count": 0})
+        entry["count"] += 1
+    return sorted(
+        (g for g in groups.values() if g["count"] >= min_count),
+        key=lambda g: g["count"],
+        reverse=True,
+    )
+
+
+def run_unresolved_report(min_count: int = 2) -> StageResult:
+    """CLI entry point: print unresolved stock mentions worth a look."""
+    from . import db
+
+    rows = db.mentions_for_normalization()
+    report = unresolved_report(rows, min_count=min_count)
+    if not report:
+        print(f"normalize: no unresolved stock mention has {min_count}+ occurrence(s)")
+    else:
+        print(f"normalize: {len(report)} unresolved stock name(s) with {min_count}+ occurrence(s):")
+        for item in report:
+            print(f"  {item['count']:>3}x  {item['raw_mention']}")
+    return StageResult("unresolved", len(report), len(rows))
+
+
 if __name__ == "__main__":
     raise SystemExit(0 if run().ok else 1)

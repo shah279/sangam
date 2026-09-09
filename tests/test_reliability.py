@@ -487,6 +487,35 @@ class NormalizationTests(unittest.TestCase):
     def test_nse_list_failure_degrades_to_unresolved(self, _nse, _broker):
         self.assertIsNone(normalize.resolve("Some Other Unlisted Co", "stock"))
 
+    def test_unresolved_report_ranks_by_frequency_and_omits_one_offs(self):
+        rows = [
+            {"raw_mention": "Kanohar Electricals", "resolved_symbol": None, "instrument_type": "stock"},
+            {"raw_mention": "kanohar electricals", "resolved_symbol": None, "instrument_type": "stock"},
+            {"raw_mention": "Kanohar Electricals", "resolved_symbol": None, "instrument_type": "stock"},
+            {"raw_mention": "Some Rare Co", "resolved_symbol": None, "instrument_type": "stock"},
+            {"raw_mention": "Reliance Industries", "resolved_symbol": "RELIANCE", "instrument_type": "stock"},
+            {"raw_mention": "Nifty 50", "resolved_symbol": None, "instrument_type": "sector"},
+            {"raw_mention": "mutual funds", "resolved_symbol": None, "instrument_type": "mutual_fund"},
+        ]
+
+        report = normalize.unresolved_report(rows)
+
+        self.assertEqual(
+            [{"raw_mention": "Kanohar Electricals", "count": 3}], report
+        )
+
+    @patch(
+        "sangam.db.mentions_for_normalization",
+        return_value=[
+            {"raw_mention": "Kanohar Electricals", "resolved_symbol": None, "instrument_type": "stock"},
+            {"raw_mention": "Kanohar Electricals", "resolved_symbol": None, "instrument_type": "stock"},
+        ],
+    )
+    def test_ingest_unresolved_stage_reports_via_normalize(self, _mentions):
+        result = ingest.run_unresolved()
+
+        self.assertEqual(StageResult("unresolved", 1, 2), result)
+
     @patch("sangam.db.fetch_nse_equity_list", return_value=[])
     @patch("sangam.db.fetch_broker_instruments", return_value=[])
     def test_snapshot_evaluation_meets_quality_gate(self, _broker, _nse):
