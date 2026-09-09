@@ -4,6 +4,8 @@ context manager so the other stages don't need changes; the `conn` arg is ignore
 """
 from __future__ import annotations
 import atexit
+import csv
+import io
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -333,6 +335,29 @@ def fetch_broker_instruments() -> list[dict]:
         if len(page) < page_size:
             return rows
         start += page_size
+
+
+NSE_EQUITY_LIST_URL = "https://archives.nseindia.com/content/equity/EQUITY_L.csv"
+
+
+def fetch_nse_equity_list() -> list[dict]:
+    """Read NSE's public, unauthenticated equity list: symbol + registered
+    company name. Used as a normalization fallback for mentions that name a
+    company (not its ticker) and aren't in the broker instrument master's
+    ticker-only names either. Returns [] on any failure so normalize.py can
+    degrade to its other sources instead of failing the pipeline — this is a
+    third-party scrape with no SLA, not a service Sangam controls.
+    """
+    try:
+        r = fetch_external(NSE_EQUITY_LIST_URL, timeout=30)
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return []
+    reader = csv.DictReader(io.StringIO(r.text))
+    return [
+        {"symbol": (row.get("SYMBOL") or "").strip(), "name": (row.get("NAME OF COMPANY") or "").strip()}
+        for row in reader
+    ]
 
 
 def fetch_external(url: str, **kwargs) -> httpx.Response:

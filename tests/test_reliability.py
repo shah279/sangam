@@ -409,9 +409,10 @@ class ExtractionStateTests(unittest.TestCase):
 
 class NormalizationTests(unittest.TestCase):
     def setUp(self):
-        # The broker-master lookup caches for the process lifetime; reset it
-        # so one test's mocked fixture can't leak into another's.
+        # These lookups cache for the process lifetime; reset them so one
+        # test's mocked fixture can't leak into another's.
         normalize._broker_lookup_cache = None
+        normalize._nse_lookup_cache = None
 
     def test_aliases_merge_to_one_symbol(self):
         self.assertEqual("RELIANCE", normalize.resolve("RIL", "stock"))
@@ -422,7 +423,9 @@ class NormalizationTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(("INDEX:NIFTY_50", "sector"), (result.symbol, result.instrument_type))
 
-    def test_ambiguous_and_generic_names_are_not_forced(self):
+    @patch("sangam.db.fetch_nse_equity_list", return_value=[])
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    def test_ambiguous_and_generic_names_are_not_forced(self, _broker, _nse):
         self.assertIsNone(normalize.resolve("Tata", "stock"))
         self.assertIsNone(normalize.resolve("mutual funds", "mutual_fund"))
 
@@ -448,17 +451,18 @@ class NormalizationTests(unittest.TestCase):
 
     @patch("sangam.db.fetch_broker_instruments")
     def test_broker_master_matches_despite_registered_legal_suffix(self, fetch):
-        # A transcript says "Marksans Pharma"; the broker master's registered
+        # A transcript says "Acme Solar"; the broker master's registered
         # name carries the legal suffix the speaker never says out loud.
         fetch.return_value = [{
-            "exchange": "NSE", "symbol": "MARKSANS", "name": "Marksans Pharma Limited",
-            "instrument_type": "EQ", "trading_symbol": "MARKSANS-EQ",
+            "exchange": "NSE", "symbol": "ACMESOLAR", "name": "Acme Solar Holdings Limited",
+            "instrument_type": "EQ", "trading_symbol": "ACMESOLAR-EQ",
         }]
 
-        self.assertEqual("MARKSANS", normalize.resolve("Marksans Pharma", "stock"))
+        self.assertEqual("ACMESOLAR", normalize.resolve("Acme Solar Holdings", "stock"))
 
+    @patch("sangam.db.fetch_nse_equity_list", return_value=[])
     @patch("sangam.db.fetch_broker_instruments")
-    def test_broker_master_ignores_non_equity_rows(self, fetch):
+    def test_broker_master_ignores_non_equity_rows(self, fetch, _nse):
         fetch.return_value = [{
             "exchange": "NSE", "symbol": "Nifty Bank", "name": "NIFTY BANK",
             "instrument_type": "AMXIDX", "trading_symbol": "Nifty Bank",
@@ -466,11 +470,29 @@ class NormalizationTests(unittest.TestCase):
 
         self.assertIsNone(normalize.resolve("Nifty Bank", "stock"))
 
+    @patch("sangam.db.fetch_nse_equity_list", return_value=[])
     @patch("sangam.db.fetch_broker_instruments", side_effect=RuntimeError("network down"))
-    def test_broker_master_failure_degrades_to_unresolved(self, _fetch):
+    def test_broker_master_failure_degrades_to_unresolved(self, _fetch, _nse):
         self.assertIsNone(normalize.resolve("Some Unlisted Co", "stock"))
 
-    def test_snapshot_evaluation_meets_quality_gate(self):
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    def test_nse_list_resolves_names_missing_from_other_sources(self, _broker):
+        with patch("sangam.db.fetch_nse_equity_list", return_value=[
+            {"symbol": "MAZDOCK", "name": "MAZAGON DOCK SHIPBUILDERS LIMITED"},
+        ]):
+            self.assertEqual("MAZDOCK", normalize.resolve("Mazagon Dock Shipbuilders", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    @patch("sangam.db.fetch_nse_equity_list", side_effect=RuntimeError("nse archives unreachable"))
+    def test_nse_list_failure_degrades_to_unresolved(self, _nse, _broker):
+        self.assertIsNone(normalize.resolve("Some Other Unlisted Co", "stock"))
+
+    @patch("sangam.db.fetch_nse_equity_list", return_value=[])
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    def test_snapshot_evaluation_meets_quality_gate(self, _broker, _nse):
+        # The quality gate exercises deterministic, reviewed matching (curated
+        # aliases) — it must not depend on live external data sources that can
+        # change independently of this code and make the gate flaky.
         metrics = evaluate.evaluate()
 
         self.assertEqual([], metrics["failures"])

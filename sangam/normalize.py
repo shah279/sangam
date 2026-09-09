@@ -55,6 +55,7 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "LT": ("L&T", "L and T", "Larsen and Toubro"),
     "MANAPPURAM": ("Manappuram Finance", "Manappuram"),
     "MARKSANS": ("Marksans Pharma",),
+    "MAZDOCK": ("Mazagon Dock", "Mazagon Dock Shipbuilders"),
     "MARUTI": ("Maruti", "Maruti Suzuki"),
     "MTARTECH": ("MTAR Technologies", "MTAR Tech"),
     "NAUKRI": ("Info Edge", "Info Edge India"),
@@ -213,6 +214,48 @@ def _broker_lookup() -> dict[str, Resolution]:
     return lookup
 
 
+_nse_lookup_cache: dict[str, Resolution] | None = None
+
+
+def _nse_company_lookup() -> dict[str, Resolution]:
+    """Lazily build a company-name -> Resolution index from NSE's own public
+    equity list, caching for the process lifetime. This is the broadest of
+    the three resolution sources: unlike the broker instrument master (whose
+    `name` field turned out to just repeat the ticker for this data), NSE's
+    list carries real registered company names, so it catches mentions like
+    "Marksans Pharma" that only match a ticker-only source when the raw
+    mention happens to equal the ticker itself. It only covers NSE-listed
+    equities, though, so the broker master (which also has BSE) is checked
+    first. Degrades to an empty index on any failure — this is an
+    unauthenticated third-party scrape with no SLA, not a service Sangam
+    controls, so it must never be able to fail the pipeline.
+    """
+    global _nse_lookup_cache
+    if _nse_lookup_cache is not None:
+        return _nse_lookup_cache
+    from . import db
+
+    try:
+        rows = db.fetch_nse_equity_list()
+    except Exception as e:
+        print(f"normalize: NSE equity list unavailable, skipping ({e})")
+        rows = []
+
+    lookup: dict[str, Resolution] = {}
+    for row in rows:
+        symbol, name = row.get("symbol") or "", row.get("name") or ""
+        if not symbol or not name:
+            continue
+        resolution = Resolution(symbol, "stock", method="nse_master")
+        for alias in (name, symbol):
+            lookup.setdefault(key(alias), resolution)
+
+    if rows:
+        print(f"normalize: NSE equity list loaded ({len(lookup)} alias(es))")
+    _nse_lookup_cache = lookup
+    return lookup
+
+
 def is_generic(raw_mention: str) -> bool:
     return key(raw_mention) in GENERIC_MENTIONS
 
@@ -230,7 +273,7 @@ def resolve_record(raw_mention: str, instrument_type: str | None = None) -> Reso
     if matches:
         return None  # ambiguous across curated catalogs; stay conservative
     if instrument_type in (None, "", "stock"):
-        return _broker_lookup().get(normalized)
+        return _broker_lookup().get(normalized) or _nse_company_lookup().get(normalized)
     return None
 
 
