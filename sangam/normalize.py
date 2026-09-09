@@ -134,10 +134,18 @@ GENERIC_MENTIONS = {
 }
 
 
+# Pure corporate-form words that a registered company name carries but a
+# spoken/transcript mention almost never does ("Marksans Pharma" vs. the
+# broker master's "Marksans Pharma Limited"). None of these disambiguate one
+# company from another, so stripping them is safe everywhere key() is used.
+_CORP_SUFFIXES = re.compile(r"\b(ltd|limited|pvt|private)\b")
+
+
 def key(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "").casefold()
     value = value.replace("&", " and ")
     value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
+    value = _CORP_SUFFIXES.sub(" ", value)
     return " ".join(value.split())
 
 

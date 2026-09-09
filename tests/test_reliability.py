@@ -447,6 +447,17 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual("TATAPOWER", normalize.resolve("Tata Power", "stock"))
 
     @patch("sangam.db.fetch_broker_instruments")
+    def test_broker_master_matches_despite_registered_legal_suffix(self, fetch):
+        # A transcript says "Marksans Pharma"; the broker master's registered
+        # name carries the legal suffix the speaker never says out loud.
+        fetch.return_value = [{
+            "exchange": "NSE", "symbol": "MARKSANS", "name": "Marksans Pharma Limited",
+            "instrument_type": "EQ", "trading_symbol": "MARKSANS-EQ",
+        }]
+
+        self.assertEqual("MARKSANS", normalize.resolve("Marksans Pharma", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments")
     def test_broker_master_ignores_non_equity_rows(self, fetch):
         fetch.return_value = [{
             "exchange": "NSE", "symbol": "Nifty Bank", "name": "NIFTY BANK",
