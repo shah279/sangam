@@ -92,6 +92,30 @@ data class HealthSnapshot(
     val terminalErrors: Int,
 )
 
+@Serializable
+data class PricePoint(
+    val symbol: String,
+    @SerialName("price_date") val priceDate: String,
+    val close: Double,
+)
+
+@Serializable
+data class WatchlistItem(
+    val id: Long? = null,
+    val symbol: String,
+    @SerialName("added_at") val addedAt: String? = null,
+    @SerialName("entry_price") val entryPrice: Double? = null,
+    val note: String? = null,
+)
+
+/** Insert payload: id/added_at are server-generated, so they're never sent. */
+@Serializable
+data class NewWatchlistItem(
+    val symbol: String,
+    @SerialName("entry_price") val entryPrice: Double?,
+    val note: String? = null,
+)
+
 data class ConsensusItem(
     val name: String,
     val instrumentType: String?,

@@ -14,6 +14,16 @@ ROOT = Path(__file__).resolve().parent.parent
 SUPABASE_URL = os.environ.get("SANGAM_SUPABASE_URL", "").rstrip("/")   # https://<ref>.supabase.co
 SUPABASE_KEY = os.environ.get("SANGAM_SUPABASE_KEY")                    # service_role key
 
+# --- Broker instrument master (separate Supabase project). Its RLS policy is
+# scoped to one specific authenticated identity there, not to "anon" — so this
+# needs a dedicated Auth user in that project (email/password), plus its anon
+# key only for the Supabase gateway's required apikey header. All optional:
+# normalize.py degrades to the curated alias table alone when unset.
+BROKER_SUPABASE_URL = os.environ.get("SANGAM_BROKER_SUPABASE_URL", "").rstrip("/")
+BROKER_SUPABASE_ANON_KEY = os.environ.get("SANGAM_BROKER_SUPABASE_ANON_KEY")
+BROKER_SUPABASE_EMAIL = os.environ.get("SANGAM_BROKER_SUPABASE_EMAIL")
+BROKER_SUPABASE_PASSWORD = os.environ.get("SANGAM_BROKER_SUPABASE_PASSWORD")
+
 # --- Gemini (REST) ---
 GEMINI_KEY = os.environ.get("SANGAM_GEMINI_KEY")
 GEMINI_MODEL = os.environ.get("SANGAM_GEMINI_MODEL", "gemini-3.1-flash-lite")

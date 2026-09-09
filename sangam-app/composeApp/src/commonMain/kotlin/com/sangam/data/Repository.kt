@@ -80,6 +80,22 @@ object Repository {
         return data
     }
 
+    /** Latest cached close per symbol (from the `latest_prices` view), keyed by symbol. */
+    suspend fun latestPrices(symbols: List<String>): Map<String, PricePoint> {
+        if (symbols.isEmpty()) return emptyMap()
+        val inList = symbols.joinToString(",") { it.encodeURLQueryComponent() }
+        val points: List<PricePoint> = Supabase.select("latest_prices", "symbol=in.($inList)&select=*")
+        return points.associateBy { it.symbol }
+    }
+
+    suspend fun watchlist(): List<WatchlistItem> =
+        Supabase.select("watchlist", "select=*&order=added_at.desc")
+
+    suspend fun addToWatchlist(symbol: String, entryPrice: Double?, note: String? = null): WatchlistItem =
+        Supabase.insert<NewWatchlistItem, WatchlistItem>("watchlist", NewWatchlistItem(symbol, entryPrice, note)).first()
+
+    suspend fun removeFromWatchlist(id: Long) = Supabase.delete("watchlist", "id=eq.$id")
+
     /** Creators sorted by their most recent published video (most active on top). */
     suspend fun creatorsByRecency(): List<Pair<Channel, String?>> {
         val chans = channels()

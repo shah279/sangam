@@ -15,11 +15,17 @@ import com.sangam.model.Mention
 import com.sangam.ui.*
 import com.sangam.ui.components.*
 import com.sangam.util.relativeDay
+import kotlinx.coroutines.launch
+import kotlin.math.round
 
 @Composable
 fun StockDetailScreen(nav: Navigator, name: String, instrumentType: String?) {
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val state by loadState(name) { Repository.mentionsForStock(name) }
+    val priceState by loadState(name) { Repository.latestPrices(listOf(name))[name] }
+    var addedNote by remember(name) { mutableStateOf<String?>(null) }
+
     AsyncContent(state) { mentions ->
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(vertical = 8.dp)) {
             item {
@@ -29,6 +35,17 @@ fun StockDetailScreen(nav: Navigator, name: String, instrumentType: String?) {
                     Spacer(Modifier.height(4.dp))
                     Text("${mentions.size} mentions across ${mentions.mapNotNull { it.video?.channelId }.distinct().size} channels",
                         style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.height(8.dp))
+                    val price = (priceState as? Async.Success)?.data?.close
+                    Button(
+                        enabled = price != null && addedNote == null,
+                        onClick = {
+                            scope.launch {
+                                Repository.addToWatchlist(name, price)
+                                addedNote = "Added to radar at ₹${price?.let { round(it * 100) / 100 }}"
+                            }
+                        },
+                    ) { Text(addedNote ?: if (price == null) "No price cached yet" else "Add to radar") }
                 }
             }
             items(mentions) { m -> MentionByCreatorRow(m) { m.videoId.let { nav.push(Screen.VideoDetail(it, m.video?.title ?: "")) } } }

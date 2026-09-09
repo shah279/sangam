@@ -272,6 +272,119 @@ def set_mention_normalizations(
     return changed
 
 
+def _broker_auth_token() -> str | None:
+    """Sign in as Sangam's own dedicated user in the broker project's Supabase
+    Auth and return a short-lived JWT. That project's RLS policy is scoped to
+    this one authenticated identity (auth.uid()), not to "anon" or to every
+    logged-in user of that app — a Sangam-project key/JWT doesn't satisfy it,
+    since Supabase Auth identities are per-project. Re-authenticating on every
+    call is deliberate: this runs once per pipeline invocation (batch, not a
+    long-lived session), so there's no session/refresh-token state worth
+    keeping around.
+    """
+    if not (config.BROKER_SUPABASE_URL and config.BROKER_SUPABASE_ANON_KEY
+            and config.BROKER_SUPABASE_EMAIL and config.BROKER_SUPABASE_PASSWORD):
+        return None
+    r = _do(
+        "POST", f"{config.BROKER_SUPABASE_URL}/auth/v1/token",
+        headers={"apikey": config.BROKER_SUPABASE_ANON_KEY, "Content-Type": "application/json"},
+        params={"grant_type": "password"},
+        json={"email": config.BROKER_SUPABASE_EMAIL, "password": config.BROKER_SUPABASE_PASSWORD},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def fetch_broker_instruments() -> list[dict]:
+    """Read the NSE/BSE equity instrument master from the separate Supabase
+    project that already maintains it. Requires signing in as Sangam's
+    dedicated service user there (see _broker_auth_token) — that project's RLS
+    is scoped to that one identity, so an anon key alone would return nothing.
+    The safety of this call depends entirely on that other project's setup,
+    not on anything here: its RLS policy must gate on both auth.uid() (who is
+    asking) and the row's own owner column (whose data is being exposed —
+    a different UID from Sangam's), and its base table's column grants must
+    be narrowed to the safe columns so a direct table query can't return
+    sensitive ones (token, raw_data, user_id, ...) even if it bypasses the
+    sanitized broker_instruments_public view queried below. Returns [] when
+    unconfigured or unreachable, so normalize.py degrades to the curated
+    alias table alone instead of failing the pipeline.
+    """
+    token = _broker_auth_token()
+    if not token:
+        return []
+    url = f"{config.BROKER_SUPABASE_URL}/rest/v1/broker_instruments_public"
+    base_headers = {"apikey": config.BROKER_SUPABASE_ANON_KEY, "Authorization": f"Bearer {token}"}
+    rows: list[dict] = []
+    page_size = 1000
+    start = 0
+    while True:
+        r = _do(
+            "GET", url,
+            headers={**base_headers, "Range-Unit": "items",
+                     "Range": f"{start}-{start + page_size - 1}"},
+            params={"select": "*", "order": "symbol"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        page = r.json()
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        start += page_size
+
+
+def fetch_external(url: str, **kwargs) -> httpx.Response:
+    """GET a public third-party endpoint (e.g. Yahoo Finance) with the same
+    retry/backoff used for Supabase calls. Unlike fetch_feed/fetch_youtube_page,
+    this does not raise_for_status itself: a 404 from a price API can mean
+    "no data for this ticker" rather than a real error, and callers need to
+    tell the two apart."""
+    return _do("GET", url, headers=_UA, timeout=30, **kwargs)
+
+
+def symbols_needing_prices() -> list[str]:
+    """Distinct resolved stock symbols worth pricing, paginated like other reads."""
+    symbols: set[str] = set()
+    page_size = 1000
+    start = 0
+    while True:
+        r = _do(
+            "GET", _url("mentions"),
+            headers=_headers({
+                "Range-Unit": "items",
+                "Range": f"{start}-{start + page_size - 1}",
+            }),
+            params={
+                "select": "resolved_symbol",
+                "instrument_type": "eq.stock",
+                "resolved_symbol": "not.is.null",
+                "order": "id",
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        page = r.json()
+        symbols.update(row["resolved_symbol"] for row in page)
+        if len(page) < page_size:
+            return sorted(symbols)
+        start += page_size
+
+
+def upsert_price_points(conn, points: list[dict], chunk_size: int = 500) -> int:
+    """Batch-insert EOD closes, merging on the (symbol, price_date) primary key."""
+    updated = 0
+    for offset in range(0, len(points), chunk_size):
+        chunk = points[offset:offset + chunk_size]
+        r = _do("POST", _url("price_points"),
+                headers=_headers({"Prefer": "resolution=merge-duplicates"}),
+                json=chunk, timeout=30)
+        r.raise_for_status()
+        updated += len(chunk)
+    return updated
+
+
 def recent_mentions_for_report(limit: int = 3000) -> list[dict]:
     """Read recent mentions with creator/video context for daily consensus output."""
     rows: list[dict] = []

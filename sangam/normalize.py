@@ -155,6 +155,52 @@ _LOOKUPS = {
     "mutual_fund": _lookup(FUND_ALIASES, "mutual_fund"),
 }
 
+_broker_lookup_cache: dict[str, Resolution] | None = None
+
+
+def _strip_series_suffix(trading_symbol: str | None) -> str | None:
+    """AngelOne-style trading symbols carry a series suffix ("RELIANCE-EQ")."""
+    if not trading_symbol:
+        return None
+    return trading_symbol.rsplit("-", 1)[0] if "-" in trading_symbol else trading_symbol
+
+
+def _broker_lookup() -> dict[str, Resolution]:
+    """Lazily build a name/symbol -> Resolution index from the separate
+    project's NSE/BSE instrument master, caching it for the process lifetime.
+    Falls back to an empty index (no broker-backed resolutions) on any error,
+    so a misconfigured or unreachable second project degrades gracefully
+    instead of failing normalization for everyone.
+    """
+    global _broker_lookup_cache
+    if _broker_lookup_cache is not None:
+        return _broker_lookup_cache
+    from . import db
+
+    try:
+        rows = db.fetch_broker_instruments()
+    except Exception as e:
+        print(f"normalize: broker instrument master unavailable, skipping ({e})")
+        rows = []
+
+    lookup: dict[str, Resolution] = {}
+    # NSE sorted first so it wins ties with BSE on the same normalized name.
+    for row in sorted(rows, key=lambda r: r.get("exchange") != "NSE"):
+        if row.get("instrument_type") != "EQ":
+            continue  # indices/derivatives aren't priceable via prices.py yet
+        symbol = (row.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        resolution = Resolution(symbol, "stock", method="broker_master")
+        aliases = (row.get("name"), symbol, _strip_series_suffix(row.get("trading_symbol")))
+        for alias in filter(None, aliases):
+            lookup.setdefault(key(alias), resolution)
+
+    if rows:
+        print(f"normalize: broker instrument master loaded ({len(lookup)} alias(es))")
+    _broker_lookup_cache = lookup
+    return lookup
+
 
 def is_generic(raw_mention: str) -> bool:
     return key(raw_mention) in GENERIC_MENTIONS
@@ -168,7 +214,13 @@ def resolve_record(raw_mention: str, instrument_type: str | None = None) -> Reso
     if declared:
         return declared
     matches = {lookup[normalized] for lookup in _LOOKUPS.values() if normalized in lookup}
-    return next(iter(matches)) if len(matches) == 1 else None
+    if len(matches) == 1:
+        return next(iter(matches))
+    if matches:
+        return None  # ambiguous across curated catalogs; stay conservative
+    if instrument_type in (None, "", "stock"):
+        return _broker_lookup().get(normalized)
+    return None
 
 
 def resolve(raw_mention: str, instrument_type: str | None = None) -> str | None:

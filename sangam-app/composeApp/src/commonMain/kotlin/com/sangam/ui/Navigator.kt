@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 sealed interface Screen {
     data object Consensus : Screen
     data object Sectors : Screen
+    data object BestPicks : Screen
     data object Creators : Screen
     data object Health : Screen
     data class StockDetail(val name: String, val instrumentType: String?) : Screen

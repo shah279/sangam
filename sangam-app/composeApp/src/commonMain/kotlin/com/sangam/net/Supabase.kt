@@ -4,12 +4,21 @@ import com.sangam.Config
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
-/** Thin read-only client over Supabase PostgREST. */
+/**
+ * Thin client over Supabase PostgREST. Almost every table is read-only for
+ * the anon key (RLS denies writes) — `watchlist` is the one deliberate
+ * exception (see schema.sql), which is what [insert]/[delete] exist for.
+ */
 object Supabase {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -32,6 +41,27 @@ object Supabase {
             header("apikey", Config.SUPABASE_ANON_KEY)
             header("Authorization", "Bearer ${Config.SUPABASE_ANON_KEY}")
         }.body()
+    }
+
+    /** POST a new row and return the inserted representation(s). */
+    suspend inline fun <reified Body, reified Response> insert(table: String, body: Body): List<Response> {
+        val url = "${Config.SUPABASE_URL}/rest/v1/$table"
+        return http().post(url) {
+            header("apikey", Config.SUPABASE_ANON_KEY)
+            header("Authorization", "Bearer ${Config.SUPABASE_ANON_KEY}")
+            header("Prefer", "return=representation")
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }.body()
+    }
+
+    /** DELETE rows matching a raw PostgREST filter, e.g. "id=eq.42". */
+    suspend fun delete(table: String, query: String) {
+        val url = "${Config.SUPABASE_URL}/rest/v1/$table?$query"
+        http().delete(url) {
+            header("apikey", Config.SUPABASE_ANON_KEY)
+            header("Authorization", "Bearer ${Config.SUPABASE_ANON_KEY}")
+        }
     }
 
     fun http(): HttpClient = client

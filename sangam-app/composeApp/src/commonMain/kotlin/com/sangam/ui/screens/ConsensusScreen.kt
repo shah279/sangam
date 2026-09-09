@@ -90,7 +90,7 @@ private fun SortRow(selected: SortMode, onSelect: (SortMode) -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ConsensusRow(item: ConsensusItem, onClick: () -> Unit) {
+fun ConsensusRow(item: ConsensusItem, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

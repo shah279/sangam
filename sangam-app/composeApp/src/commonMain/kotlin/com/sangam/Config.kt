@@ -1,8 +1,10 @@
 package com.sangam
 
 /**
- * Fill these in. Use the Supabase ANON key (read-only via RLS policies), NOT the
- * service_role key — the app only reads.
+ * Fill these in. Use the Supabase ANON key, NOT the service_role key. RLS makes
+ * every table read-only for this key except `watchlist`, which the app is
+ * allowed to INSERT/DELETE into directly (see schema.sql) since there's no
+ * login system to scope a write to a user.
  */
 object Config {
     const val SUPABASE_URL = "https://rngxzrpjglhjiirsiato.supabase.co"

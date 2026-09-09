@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -41,6 +42,7 @@ fun App() {
                 NavigationBar {
                     tab(nav, current, Screen.Consensus, "Stocks", Icons.Default.BarChart)
                     tab(nav, current, Screen.Sectors, "Sectors", Icons.Default.Category)
+                    tab(nav, current, Screen.BestPicks, "Best picks", Icons.Default.Star)
                     tab(nav, current, Screen.Creators, "Creators", Icons.Default.People)
                     tab(nav, current, Screen.Health, "Health", Icons.Default.HealthAndSafety)
                 }
@@ -52,6 +54,7 @@ fun App() {
                     when (val s = current) {
                         Screen.Consensus -> StocksScreen(nav)
                         Screen.Sectors -> SectorsScreen(nav)
+                        Screen.BestPicks -> BestPicksScreen(nav)
                         Screen.Creators -> CreatorsScreen(nav)
                         Screen.Health -> HealthScreen(nav)
                         is Screen.StockDetail -> StockDetailScreen(nav, s.name, s.instrumentType)
@@ -77,6 +80,7 @@ private fun RowScope.tab(nav: Navigator, current: Screen, tab: Screen, label: St
 private fun titleFor(s: Screen): String = when (s) {
     Screen.Consensus -> "Sangam · Stocks"
     Screen.Sectors -> "Sectors"
+    Screen.BestPicks -> "Best picks"
     Screen.Creators -> "Creators"
     Screen.Health -> "Fetch health"
     is Screen.StockDetail -> s.name
@@ -87,6 +91,7 @@ private fun titleFor(s: Screen): String = when (s) {
 private fun keyFor(s: Screen): String = when (s) {
     Screen.Consensus -> "stocks"
     Screen.Sectors -> "sectors"
+    Screen.BestPicks -> "best_picks"
     Screen.Creators -> "creators"
     Screen.Health -> "health"
     is Screen.StockDetail -> "stock:${s.name}"

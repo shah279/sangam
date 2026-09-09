@@ -191,3 +191,55 @@ CREATE POLICY "public read channels" ON public.channels FOR SELECT TO anon, auth
 CREATE POLICY "public read videos" ON public.videos FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY "public read mentions" ON public.mentions FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY "public read runs" ON public.runs FOR SELECT TO anon, authenticated USING (true);
+
+-- EOD close cache for price-tracking features (radar, creator scorecards).
+-- Populated from Yahoo Finance's free chart API since NSE/BSE has no official
+-- free EOD feed; symbol matches mentions.resolved_symbol.
+CREATE TABLE IF NOT EXISTS price_points (
+    symbol      TEXT NOT NULL,
+    price_date  DATE NOT NULL,
+    close       NUMERIC NOT NULL,
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (symbol, price_date)
+);
+CREATE INDEX IF NOT EXISTS idx_price_points_symbol ON price_points(symbol, price_date DESC);
+
+ALTER TABLE public.price_points ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.price_points FROM anon, authenticated;
+GRANT SELECT ON TABLE public.price_points TO anon, authenticated;
+DROP POLICY IF EXISTS "public read price_points" ON public.price_points;
+CREATE POLICY "public read price_points" ON public.price_points FOR SELECT TO anon, authenticated USING (true);
+
+-- One row per symbol's most recent close, so the app can fetch "current price"
+-- for a set of symbols without pulling each symbol's full 2-year history.
+CREATE OR REPLACE VIEW public.latest_prices AS
+SELECT DISTINCT ON (symbol) symbol, price_date, close
+FROM public.price_points
+ORDER BY symbol, price_date DESC;
+
+ALTER VIEW public.latest_prices SET (security_invoker = true);
+GRANT SELECT ON public.latest_prices TO anon, authenticated;
+
+-- Personal watchlist ("radar"): the app captures entry_price itself at the
+-- moment a pick is added, so it's a plain snapshot rather than a foreign key
+-- into price_points. This is the one table the (single-user, no-login) app
+-- writes directly: the anon key may INSERT a pick and DELETE it later, but
+-- every other table — and every other operation here — stays read-only.
+CREATE TABLE IF NOT EXISTS watchlist (
+    id           BIGSERIAL PRIMARY KEY,
+    symbol       TEXT NOT NULL,
+    added_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    entry_price  NUMERIC,
+    note         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol);
+
+ALTER TABLE public.watchlist ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.watchlist FROM anon, authenticated;
+GRANT SELECT, INSERT, DELETE ON TABLE public.watchlist TO anon, authenticated;
+DROP POLICY IF EXISTS "public read watchlist" ON public.watchlist;
+DROP POLICY IF EXISTS "public add to watchlist" ON public.watchlist;
+DROP POLICY IF EXISTS "public remove from watchlist" ON public.watchlist;
+CREATE POLICY "public read watchlist" ON public.watchlist FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "public add to watchlist" ON public.watchlist FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "public remove from watchlist" ON public.watchlist FOR DELETE TO anon, authenticated USING (true);

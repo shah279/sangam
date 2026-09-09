@@ -9,7 +9,9 @@ from types import SimpleNamespace
 
 import httpx
 
-from sangam import captions, consensus, daily, db, discover, evaluate, extract, ingest, normalize
+from sangam import (
+    captions, consensus, daily, db, discover, evaluate, extract, ingest, normalize, prices,
+)
 from sangam.outcome import StageResult
 
 
@@ -37,6 +39,67 @@ class HttpRetryTests(unittest.TestCase):
         )
         with self.assertRaises(httpx.HTTPStatusError):
             db.fetch_feed("https://example.test/feed")
+
+
+class BrokerAuthTests(unittest.TestCase):
+    """The broker-instruments project scopes its RLS policy to one dedicated
+    Auth identity, not to anon — so fetching from it means signing in as that
+    user first, not just sending an anon key. See db._broker_auth_token."""
+
+    def test_returns_none_when_unconfigured(self):
+        with patch.multiple(
+            "sangam.db.config",
+            BROKER_SUPABASE_URL="", BROKER_SUPABASE_ANON_KEY=None,
+            BROKER_SUPABASE_EMAIL=None, BROKER_SUPABASE_PASSWORD=None,
+        ):
+            self.assertIsNone(db._broker_auth_token())
+
+    @patch("sangam.db._do")
+    def test_signs_in_with_password_grant_and_returns_access_token(self, do):
+        do.return_value = httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://broker.test/auth/v1/token"),
+            json={"access_token": "jwt-for-sangam-service-user"},
+        )
+        with patch.multiple(
+            "sangam.db.config",
+            BROKER_SUPABASE_URL="https://broker.test", BROKER_SUPABASE_ANON_KEY="anon-key",
+            BROKER_SUPABASE_EMAIL="sangam@service.test", BROKER_SUPABASE_PASSWORD="secret",
+        ):
+            token = db._broker_auth_token()
+
+        self.assertEqual("jwt-for-sangam-service-user", token)
+        _, kwargs = do.call_args
+        self.assertEqual("anon-key", kwargs["headers"]["apikey"])
+        self.assertEqual(
+            {"email": "sangam@service.test", "password": "secret"}, kwargs["json"]
+        )
+
+    @patch("sangam.db._broker_auth_token", return_value=None)
+    def test_fetch_broker_instruments_skips_request_without_a_token(self, _auth):
+        self.assertEqual([], db.fetch_broker_instruments())
+
+    @patch("sangam.db._do")
+    @patch("sangam.db._broker_auth_token", return_value="jwt-for-sangam-service-user")
+    def test_fetch_broker_instruments_uses_the_signed_in_token_not_the_anon_key(
+        self, _auth, do
+    ):
+        do.return_value = httpx.Response(
+            200,
+            request=httpx.Request("GET", "https://broker.test/rest/v1/broker_instruments_public"),
+            json=[{"exchange": "NSE", "symbol": "RELIANCE"}],
+        )
+        with patch.multiple(
+            "sangam.db.config",
+            BROKER_SUPABASE_URL="https://broker.test", BROKER_SUPABASE_ANON_KEY="anon-key",
+        ):
+            rows = db.fetch_broker_instruments()
+
+        self.assertEqual([{"exchange": "NSE", "symbol": "RELIANCE"}], rows)
+        _, kwargs = do.call_args
+        self.assertEqual("Bearer jwt-for-sangam-service-user", kwargs["headers"]["Authorization"])
+        self.assertEqual("anon-key", kwargs["headers"]["apikey"])
+        self.assertIn("broker_instruments_public", do.call_args.args[1])
 
 
 class CaptionStateTests(unittest.TestCase):
@@ -345,6 +408,11 @@ class ExtractionStateTests(unittest.TestCase):
 
 
 class NormalizationTests(unittest.TestCase):
+    def setUp(self):
+        # The broker-master lookup caches for the process lifetime; reset it
+        # so one test's mocked fixture can't leak into another's.
+        normalize._broker_lookup_cache = None
+
     def test_aliases_merge_to_one_symbol(self):
         self.assertEqual("RELIANCE", normalize.resolve("RIL", "stock"))
         self.assertEqual("RELIANCE", normalize.resolve("Reliance Industries", "stock"))
@@ -357,6 +425,39 @@ class NormalizationTests(unittest.TestCase):
     def test_ambiguous_and_generic_names_are_not_forced(self):
         self.assertIsNone(normalize.resolve("Tata", "stock"))
         self.assertIsNone(normalize.resolve("mutual funds", "mutual_fund"))
+
+    @patch("sangam.db.fetch_broker_instruments")
+    def test_broker_master_resolves_names_missing_from_curated_aliases(self, fetch):
+        fetch.return_value = [{
+            "exchange": "NSE", "symbol": "TATACONSUM", "name": "TATA CONSUMER PRODUCTS LTD",
+            "instrument_type": "EQ", "trading_symbol": "TATACONSUM-EQ",
+        }]
+
+        self.assertEqual("TATACONSUM", normalize.resolve("Tata Consumer Products Ltd", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments")
+    def test_broker_master_prefers_nse_on_name_collision_with_bse(self, fetch):
+        fetch.return_value = [
+            {"exchange": "BSE", "symbol": "500408", "name": "TATA POWER",
+             "instrument_type": "EQ", "trading_symbol": "TATAPOWER"},
+            {"exchange": "NSE", "symbol": "TATAPOWER", "name": "TATA POWER",
+             "instrument_type": "EQ", "trading_symbol": "TATAPOWER-EQ"},
+        ]
+
+        self.assertEqual("TATAPOWER", normalize.resolve("Tata Power", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments")
+    def test_broker_master_ignores_non_equity_rows(self, fetch):
+        fetch.return_value = [{
+            "exchange": "NSE", "symbol": "Nifty Bank", "name": "NIFTY BANK",
+            "instrument_type": "AMXIDX", "trading_symbol": "Nifty Bank",
+        }]
+
+        self.assertIsNone(normalize.resolve("Nifty Bank", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments", side_effect=RuntimeError("network down"))
+    def test_broker_master_failure_degrades_to_unresolved(self, _fetch):
+        self.assertIsNone(normalize.resolve("Some Unlisted Co", "stock"))
 
     def test_snapshot_evaluation_meets_quality_gate(self):
         metrics = evaluate.evaluate()
@@ -418,6 +519,78 @@ class ConsensusAndDailyTests(unittest.TestCase):
             self.assertTrue(brief["items"][0]["resolved"])
             self.assertIn("RELIANCE", (directory / "brief.md").read_text())
             self.assertIn("not investment advice", (directory / "captions.srt").read_text())
+
+
+class PriceTests(unittest.TestCase):
+    def test_yahoo_ticker_maps_by_symbol_namespace(self):
+        self.assertEqual("RELIANCE.NS", prices.yahoo_ticker("RELIANCE"))
+        self.assertEqual("NVDA", prices.yahoo_ticker("NASDAQ:NVDA"))
+        self.assertEqual("WMT", prices.yahoo_ticker("NYSE:WMT"))
+        self.assertIsNone(prices.yahoo_ticker("SECTOR:IT"))
+        self.assertIsNone(prices.yahoo_ticker("MF:HDFC_FLEXI_CAP"))
+
+    def test_is_trading_day_excludes_weekend(self):
+        self.assertTrue(prices.is_trading_day(datetime(2026, 9, 9, tzinfo=timezone.utc)))   # Wed
+        self.assertFalse(prices.is_trading_day(datetime(2026, 9, 13, tzinfo=timezone.utc)))  # Sun
+
+    @patch("sangam.prices.db.fetch_external")
+    def test_fetch_history_skips_null_sessions(self, fetch_external):
+        fetch_external.return_value = httpx.Response(
+            200,
+            request=httpx.Request("GET", "https://example.test/chart/RELIANCE.NS"),
+            json={
+                "chart": {
+                    "result": [{
+                        "timestamp": [1757347800, 1757434200],
+                        "indicators": {"quote": [{"close": [1402.5, None]}]},
+                    }]
+                }
+            },
+        )
+
+        result = prices.fetch_history("RELIANCE.NS")
+
+        self.assertEqual([("2025-09-08", 1402.5)], result)
+
+    @patch("sangam.prices.db.fetch_external")
+    def test_fetch_history_returns_empty_on_404(self, fetch_external):
+        fetch_external.return_value = httpx.Response(
+            404, request=httpx.Request("GET", "https://example.test/chart/BAD.NS")
+        )
+
+        self.assertEqual([], prices.fetch_history("BAD.NS"))
+
+    def test_run_skips_outside_trading_days(self):
+        with patch("sangam.prices.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 13, tzinfo=timezone.utc)  # Sunday
+            mock_dt.fromtimestamp = datetime.fromtimestamp
+            result = prices.run()
+
+        self.assertEqual(StageResult("prices", 0, 0), result)
+
+    @patch("sangam.prices.db.upsert_price_points", return_value=2)
+    @patch("sangam.prices.db.symbols_needing_prices", return_value=["RELIANCE", "SECTOR:IT"])
+    @patch(
+        "sangam.prices.fetch_history",
+        return_value=[("2026-09-08", 1390.0), ("2026-09-09", 1400.0)],
+    )
+    def test_run_prices_only_priceable_symbols_on_a_trading_day(
+        self, fetch_history, _symbols, upsert
+    ):
+        with patch("sangam.prices.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 9, tzinfo=timezone.utc)  # Wednesday
+
+            result = prices.run()
+
+        fetch_history.assert_called_once_with("RELIANCE.NS")
+        upsert.assert_called_once_with(
+            None,
+            [
+                {"symbol": "RELIANCE", "price_date": "2026-09-08", "close": 1390.0},
+                {"symbol": "RELIANCE", "price_date": "2026-09-09", "close": 1400.0},
+            ],
+        )
+        self.assertEqual(StageResult("prices", 1, 2), result)
 
 
 class RunHealthTests(unittest.TestCase):

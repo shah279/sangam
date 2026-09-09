@@ -33,7 +33,7 @@ fun relativeDay(iso: String?): String {
 }
 
 enum class DateFilter(val label: String) {
-    ALL("All"), TODAY("Today"), YESTERDAY("Yesterday"), WEEK("7 days");
+    ALL("All"), TODAY("Today"), YESTERDAY("Yesterday"), WEEK("7 days"), MONTH("30 days");
 
     fun matches(iso: String?): Boolean {
         if (this == ALL) return true
@@ -46,6 +46,7 @@ enum class DateFilter(val label: String) {
             TODAY -> diff == 0
             YESTERDAY -> diff == 1
             WEEK -> diff in 0..6
+            MONTH -> diff in 0..29
         }
     }
 }
