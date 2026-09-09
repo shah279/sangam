@@ -54,6 +54,7 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "LICI": ("LIC", "Life Insurance Corporation of India"),
     "LT": ("L&T", "L and T", "Larsen and Toubro"),
     "MANAPPURAM": ("Manappuram Finance", "Manappuram"),
+    "MARKSANS": ("Marksans Pharma",),
     "MARUTI": ("Maruti", "Maruti Suzuki"),
     "MTARTECH": ("MTAR Technologies", "MTAR Tech"),
     "NAUKRI": ("Info Edge", "Info Edge India"),
@@ -68,6 +69,8 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "RVNL": ("RVNL", "Rail Vikas Nigam"),
     "SANSERA": ("Sansera Engineering", "Sansera"),
     "SBIN": ("SBI", "State Bank of India"),
+    # "Shipa" is a recurring transcript mishearing of "Shilpa" for this stock.
+    "SHILPAMED": ("Shilpa Medicare", "Shipa Medicare"),
     "SONACOMS": ("Sona BLW", "Sona Comstar", "Sona BLW Precision Forgings"),
     "STLTECH": ("Sterlite Technologies", "STL Tech"),
     "SUZLON": ("Suzlon", "Suzlon Energy"),
