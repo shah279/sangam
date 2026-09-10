@@ -24,6 +24,10 @@ class Resolution:
 # are intentionally omitted.
 STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "ADANIENT": ("Adani Enterprises",),
+    # Registered as "Affle 3i Limited"; "Affle India" is a common older/informal name.
+    "AFFLE": ("Affle India",),
+    # Registered name is "Apollo Hospitals" (plural); this covers the singular mishearing.
+    "APOLLOHOSP": ("Apollo Hospital",),
     "ATHERENERG": ("Ather Energy", "Ather"),
     "AUBANK": ("AU Small Finance Bank", "AU Bank"),
     "AXISBANK": ("Axis Bank",),
@@ -37,6 +41,8 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "GLAND": ("Gland Pharma",),
     "GMRINFRA": ("GMR Airports", "GMR Infrastructure", "GMR"),
     "HAL": ("HAL", "Hindustan Aeronautics"),
+    # Not a prefix match: "HCL Infosystems" is a separate, differently-listed company.
+    "HCLTECH": ("HCL Tech",),
     "HDFCBANK": ("HDFC Bank",),
     "HEROMOTOCO": ("Hero MotoCorp", "Hero Motocorp"),
     "HFCL": ("HFCL",),
@@ -84,9 +90,13 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "TRENT": ("Trent", "Trent Ltd"),
     "TVSMOTOR": ("TVS Motor", "TVS Motor Company"),
     "VEDL": ("Vedanta", "Vedanta Ltd"),
+    # Registered name is "Waaree Renewable Technologies"; distinct from Waaree Energies.
+    "WAAREERTL": ("Waaree Renewables",),
     "WIPRO": ("Wipro",),
     "YESBANK": ("Yes Bank",),
     "ZEEL": ("Zee Entertainment", "Zee Entertainment Enterprises"),
+    # "Zen Tech" is a common abbreviation of the registered "Zen Technologies".
+    "ZENTEC": ("Zen Tech",),
     "NASDAQ:NVDA": ("Nvidia", "NVIDIA"),
     "NYSE:WMT": ("Walmart",),
 }
