@@ -41,14 +41,14 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "HEROMOTOCO": ("Hero MotoCorp", "Hero Motocorp"),
     "HFCL": ("HFCL",),
     "HINDCOPPER": ("Hindustan Copper",),
-    "HYUNDAI": ("Hyundai Motor India", "Hyundai"),
+    "HYUNDAI": ("Hyundai Motor India", "Hyundai", "Hyundai Motors"),
     "ICICIBANK": ("ICICI Bank",),
     "IDEA": ("Vodafone Idea", "Vi"),
     "INDIGO": ("InterGlobe Aviation", "IndiGo"),
     "INFY": ("Infosys",),
     "IRCTC": ("IRCTC",),
     "ITC": ("ITC", "ITC Ltd"),
-    "JIOFIN": ("Jio Financial", "Jio Finance", "Jio Financial Services"),
+    "JIOFIN": ("Jio Financial", "Jio Finance", "Jio Financial Services", "JFS"),
     "KALYANKJIL": ("Kalyan Jewellers",),
     "LAURUSLABS": ("Laurus Labs",),
     "LICI": ("LIC", "Life Insurance Corporation of India"),
@@ -57,7 +57,8 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "MARKSANS": ("Marksans Pharma",),
     "MAZDOCK": ("Mazagon Dock", "Mazagon Dock Shipbuilders"),
     "MARUTI": ("Maruti", "Maruti Suzuki"),
-    "MTARTECH": ("MTAR Technologies", "MTAR Tech"),
+    # "MTR technologies" is a recurring transcript mishearing of "MTAR".
+    "MTARTECH": ("MTAR Technologies", "MTAR Tech", "MTAR", "MTR Technologies"),
     "NAUKRI": ("Info Edge", "Info Edge India"),
     "NEULANDLAB": ("Neuland Labs", "Neuland Laboratories"),
     "NMDC": ("NMDC",),
@@ -132,9 +133,10 @@ FUND_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 GENERIC_MENTIONS = {
-    "active etfs", "banking and psu fund", "corporate bond fund", "etf", "etfs",
-    "global etfs", "index fund", "low duration fund", "money market fund",
-    "mutual fund", "mutual funds", "passive funds", "sif", "sip", "stock market",
+    "active etfs", "banking and psu fund", "corporate bond fund", "direct stocks", "etf",
+    "etfs", "global etfs", "index fund", "low duration fund", "money market fund",
+    "mutual fund", "mutual funds", "nse", "passive funds", "sif", "sip", "stock market",
+    "us stocks",
 }
 
 
@@ -177,6 +179,23 @@ def _strip_series_suffix(trading_symbol: str | None) -> str | None:
     return trading_symbol.rsplit("-", 1)[0] if "-" in trading_symbol else trading_symbol
 
 
+# A company-name index for prefix matching: first word -> [(all words, Resolution)].
+# Only ever built from descriptive names, never bare tickers/trading symbols —
+# prefix-matching a ticker code isn't meaningful the way it is for a name.
+PrefixIndex = dict[str, list[tuple[tuple[str, ...], "Resolution"]]]
+
+
+def _index_name(prefix_index: PrefixIndex, name: str | None, resolution: Resolution) -> None:
+    if not name:
+        return
+    words = tuple(key(name).split())
+    if len(words) >= 2:  # single-word names are too ambiguous to prefix-match
+        prefix_index.setdefault(words[0], []).append((words, resolution))
+
+
+_broker_prefix_cache: PrefixIndex | None = None
+
+
 def _broker_lookup() -> dict[str, Resolution]:
     """Lazily build a name/symbol -> Resolution index from the separate
     project's NSE/BSE instrument master, caching it for the process lifetime.
@@ -184,7 +203,7 @@ def _broker_lookup() -> dict[str, Resolution]:
     so a misconfigured or unreachable second project degrades gracefully
     instead of failing normalization for everyone.
     """
-    global _broker_lookup_cache
+    global _broker_lookup_cache, _broker_prefix_cache
     if _broker_lookup_cache is not None:
         return _broker_lookup_cache
     from . import db
@@ -196,6 +215,7 @@ def _broker_lookup() -> dict[str, Resolution]:
         rows = []
 
     lookup: dict[str, Resolution] = {}
+    prefix_index: PrefixIndex = {}
     # NSE sorted first so it wins ties with BSE on the same normalized name.
     for row in sorted(rows, key=lambda r: r.get("exchange") != "NSE"):
         if row.get("instrument_type") != "EQ":
@@ -204,17 +224,21 @@ def _broker_lookup() -> dict[str, Resolution]:
         if not symbol:
             continue
         resolution = Resolution(symbol, "stock", method="broker_master")
-        aliases = (row.get("name"), symbol, _strip_series_suffix(row.get("trading_symbol")))
+        name = row.get("name")
+        aliases = (name, symbol, _strip_series_suffix(row.get("trading_symbol")))
         for alias in filter(None, aliases):
             lookup.setdefault(key(alias), resolution)
+        _index_name(prefix_index, name, resolution)
 
     if rows:
         print(f"normalize: broker instrument master loaded ({len(lookup)} alias(es))")
     _broker_lookup_cache = lookup
+    _broker_prefix_cache = prefix_index
     return lookup
 
 
 _nse_lookup_cache: dict[str, Resolution] | None = None
+_nse_prefix_cache: PrefixIndex | None = None
 
 
 def _nse_company_lookup() -> dict[str, Resolution]:
@@ -230,7 +254,7 @@ def _nse_company_lookup() -> dict[str, Resolution]:
     unauthenticated third-party scrape with no SLA, not a service Sangam
     controls, so it must never be able to fail the pipeline.
     """
-    global _nse_lookup_cache
+    global _nse_lookup_cache, _nse_prefix_cache
     if _nse_lookup_cache is not None:
         return _nse_lookup_cache
     from . import db
@@ -242,6 +266,7 @@ def _nse_company_lookup() -> dict[str, Resolution]:
         rows = []
 
     lookup: dict[str, Resolution] = {}
+    prefix_index: PrefixIndex = {}
     for row in rows:
         symbol, name = row.get("symbol") or "", row.get("name") or ""
         if not symbol or not name:
@@ -249,11 +274,41 @@ def _nse_company_lookup() -> dict[str, Resolution]:
         resolution = Resolution(symbol, "stock", method="nse_master")
         for alias in (name, symbol):
             lookup.setdefault(key(alias), resolution)
+        _index_name(prefix_index, name, resolution)
 
     if rows:
         print(f"normalize: NSE equity list loaded ({len(lookup)} alias(es))")
     _nse_lookup_cache = lookup
+    _nse_prefix_cache = prefix_index
     return lookup
+
+
+def _prefix_resolve(normalized: str) -> Resolution | None:
+    """Resolve a mention that's a strict word-prefix of exactly one candidate
+    company name — the shortened spoken form ("Happiest Minds") of a longer
+    registered name ("Happiest Minds Technologies Limited"). This only ever
+    fills in a dropped trailing word; it never confuses two different
+    companies, and refuses outright if the prefix matches more than one.
+    Single-word mentions never reach here productively (see _index_name) —
+    a common one-word truncation ("Adani", "HDFC") could prefix dozens of
+    unrelated group companies, which is exactly the ambiguity this whole
+    module exists to avoid guessing through.
+    """
+    words = tuple(normalized.split())
+    if len(words) < 2:
+        return None
+    # Broker lookup first (checked before this function even runs, same as
+    # the exact-match order), then NSE — first unambiguous hit wins.
+    for prefix_index in (_broker_prefix_cache or {}, _nse_prefix_cache or {}):
+        candidates = prefix_index.get(words[0], [])
+        matches = {
+            resolution.symbol: resolution
+            for candidate_words, resolution in candidates
+            if len(candidate_words) > len(words) and candidate_words[: len(words)] == words
+        }
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+    return None
 
 
 def is_generic(raw_mention: str) -> bool:
@@ -273,7 +328,8 @@ def resolve_record(raw_mention: str, instrument_type: str | None = None) -> Reso
     if matches:
         return None  # ambiguous across curated catalogs; stay conservative
     if instrument_type in (None, "", "stock"):
-        return _broker_lookup().get(normalized) or _nse_company_lookup().get(normalized)
+        exact = _broker_lookup().get(normalized) or _nse_company_lookup().get(normalized)
+        return exact or _prefix_resolve(normalized)
     return None
 
 

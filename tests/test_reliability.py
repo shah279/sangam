@@ -412,7 +412,9 @@ class NormalizationTests(unittest.TestCase):
         # These lookups cache for the process lifetime; reset them so one
         # test's mocked fixture can't leak into another's.
         normalize._broker_lookup_cache = None
+        normalize._broker_prefix_cache = None
         normalize._nse_lookup_cache = None
+        normalize._nse_prefix_cache = None
 
     def test_aliases_merge_to_one_symbol(self):
         self.assertEqual("RELIANCE", normalize.resolve("RIL", "stock"))
@@ -486,6 +488,34 @@ class NormalizationTests(unittest.TestCase):
     @patch("sangam.db.fetch_nse_equity_list", side_effect=RuntimeError("nse archives unreachable"))
     def test_nse_list_failure_degrades_to_unresolved(self, _nse, _broker):
         self.assertIsNone(normalize.resolve("Some Other Unlisted Co", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    def test_prefix_match_fills_in_a_dropped_trailing_word(self, _broker):
+        # A transcript says "Happiest Minds"; the registered name has an
+        # extra word ("Technologies") the mention never said.
+        with patch("sangam.db.fetch_nse_equity_list", return_value=[
+            {"symbol": "HAPPSTMNDS", "name": "Happiest Minds Technologies Limited"},
+        ]):
+            self.assertEqual("HAPPSTMNDS", normalize.resolve("Happiest Minds", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    def test_prefix_match_refuses_when_more_than_one_candidate_matches(self, _broker):
+        with patch("sangam.db.fetch_nse_equity_list", return_value=[
+            {"symbol": "ADANIPOWER", "name": "Adani Power Limited"},
+            {"symbol": "ADANIENT", "name": "Adani Enterprises Limited"},
+        ]):
+            self.assertIsNone(normalize.resolve("Adani", "stock"))
+
+    @patch("sangam.db.fetch_broker_instruments", return_value=[])
+    def test_prefix_match_does_not_fire_on_a_single_word_mention(self, _broker):
+        # Even with only one candidate present, a single-word mention should
+        # never prefix-match — too easy for a common short word to
+        # coincidentally prefix an unrelated company (this guards the case
+        # above even if only one Adani-group company happened to be listed).
+        with patch("sangam.db.fetch_nse_equity_list", return_value=[
+            {"symbol": "ADANIPOWER", "name": "Adani Power Limited"},
+        ]):
+            self.assertIsNone(normalize.resolve("Adani", "stock"))
 
     def test_unresolved_report_ranks_by_frequency_and_omits_one_offs(self):
         rows = [
