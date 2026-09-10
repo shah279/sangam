@@ -74,6 +74,8 @@ STOCK_ALIASES: dict[str, tuple[str, ...]] = {
     "POLICYBZR": ("PB Fintech", "Policybazaar"),
     "POWERINDIA": ("Hitachi Energy", "Hitachi Energy India"),
     "RELIANCE": ("Reliance", "Reliance Industries", "RIL"),
+    # Registered as "R R Kabel" (spaced); "RR Kabel" is the common written form.
+    "RRKABEL": ("RR Kabel",),
     "RVNL": ("RVNL", "Rail Vikas Nigam"),
     "SANSERA": ("Sansera Engineering", "Sansera"),
     "SBIN": ("SBI", "State Bank of India"),
