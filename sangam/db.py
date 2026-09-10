@@ -338,26 +338,44 @@ def fetch_broker_instruments() -> list[dict]:
 
 
 NSE_EQUITY_LIST_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+NSE_EQUITY_LIST_LOCAL_PATH = config.ROOT / "sangam" / "data" / "EQUITY_L.csv"
 
 
-def fetch_nse_equity_list() -> list[dict]:
-    """Read NSE's public, unauthenticated equity list: symbol + registered
-    company name. Used as a normalization fallback for mentions that name a
-    company (not its ticker) and aren't in the broker instrument master's
-    ticker-only names either. Returns [] on any failure so normalize.py can
-    degrade to its other sources instead of failing the pipeline — this is a
-    third-party scrape with no SLA, not a service Sangam controls.
-    """
-    try:
-        r = fetch_external(NSE_EQUITY_LIST_URL, timeout=30)
-        r.raise_for_status()
-    except httpx.HTTPError:
-        return []
-    reader = csv.DictReader(io.StringIO(r.text))
+def _parse_nse_equity_csv(text: str) -> list[dict]:
+    reader = csv.DictReader(io.StringIO(text))
     return [
         {"symbol": (row.get("SYMBOL") or "").strip(), "name": (row.get("NAME OF COMPANY") or "").strip()}
         for row in reader
     ]
+
+
+def fetch_nse_equity_list() -> list[dict]:
+    """Read NSE's equity list: symbol + registered company name. Used as a
+    normalization fallback for mentions that name a company (not its ticker)
+    and aren't in the broker instrument master's ticker-only names either.
+
+    Tries the live URL first (freshest data), then falls back to a bundled
+    local copy at NSE_EQUITY_LIST_LOCAL_PATH if that fails — NSE's archive
+    subdomain is Akamai-fronted and unreliable from some networks (observed
+    hanging/blocked from a non-residential IP; unconfirmed whether Termux's
+    mobile IP fares better). The local copy goes stale over time (new IPOs,
+    renamed companies) but that's a fine tradeoff against depending entirely
+    on a scrape with no SLA. Refresh it occasionally by re-downloading from
+    NSE's own site (nseindia.com -> Market Data -> Securities Available for
+    Trading -> "Securities available for Equity segment (.csv)") and
+    replacing the file — it's a normal browser download, not an API call.
+    Returns [] only if neither source is available, so normalize.py can
+    degrade to its other sources instead of failing the pipeline.
+    """
+    try:
+        r = fetch_external(NSE_EQUITY_LIST_URL, timeout=30)
+        r.raise_for_status()
+        return _parse_nse_equity_csv(r.text)
+    except httpx.HTTPError:
+        pass
+    if NSE_EQUITY_LIST_LOCAL_PATH.exists():
+        return _parse_nse_equity_csv(NSE_EQUITY_LIST_LOCAL_PATH.read_text(encoding="utf-8"))
+    return []
 
 
 def fetch_external(url: str, *, timeout: float = 30, **kwargs) -> httpx.Response:
