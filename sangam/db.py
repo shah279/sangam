@@ -360,13 +360,15 @@ def fetch_nse_equity_list() -> list[dict]:
     ]
 
 
-def fetch_external(url: str, **kwargs) -> httpx.Response:
+def fetch_external(url: str, *, timeout: float = 30, **kwargs) -> httpx.Response:
     """GET a public third-party endpoint (e.g. Yahoo Finance) with the same
     retry/backoff used for Supabase calls. Unlike fetch_feed/fetch_youtube_page,
     this does not raise_for_status itself: a 404 from a price API can mean
     "no data for this ticker" rather than a real error, and callers need to
-    tell the two apart."""
-    return _do("GET", url, headers=_UA, timeout=30, **kwargs)
+    tell the two apart. `timeout` is a real parameter (not swept into
+    **kwargs) so a caller passing it explicitly doesn't collide with the
+    default forwarded to _do()."""
+    return _do("GET", url, headers=_UA, timeout=timeout, **kwargs)
 
 
 def symbols_needing_prices() -> list[str]:
