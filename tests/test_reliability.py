@@ -41,6 +41,23 @@ class HttpRetryTests(unittest.TestCase):
             db.fetch_feed("https://example.test/feed")
 
 
+class PriceSymbolSourcingTests(unittest.TestCase):
+    @patch("sangam.db._do")
+    def test_symbols_needing_prices_unions_mentions_and_watchlist(self, do):
+        req = httpx.Request("GET", "https://example.test")
+        do.side_effect = [
+            httpx.Response(200, request=req, json=[
+                {"resolved_symbol": "RELIANCE"}, {"resolved_symbol": "TCS"},
+            ]),
+            httpx.Response(200, request=req, json=[{"symbol": "TCS"}, {"symbol": "INFY"}]),
+        ]
+
+        symbols = db.symbols_needing_prices()
+
+        self.assertEqual(["INFY", "RELIANCE", "TCS"], symbols)
+        self.assertIn("watchlist", str(do.call_args_list[1]))
+
+
 class BrokerAuthTests(unittest.TestCase):
     """The broker-instruments project scopes its RLS policy to one dedicated
     Auth identity, not to anon — so fetching from it means signing in as that

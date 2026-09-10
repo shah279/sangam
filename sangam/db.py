@@ -390,7 +390,10 @@ def fetch_external(url: str, *, timeout: float = 30, **kwargs) -> httpx.Response
 
 
 def symbols_needing_prices() -> list[str]:
-    """Distinct resolved stock symbols worth pricing, paginated like other reads."""
+    """Distinct stock symbols worth pricing: every resolved mention, plus
+    anything a user has added straight to the watchlist by symbol (which may
+    never have been mentioned by a creator at all, so mentions alone
+    wouldn't surface it)."""
     symbols: set[str] = set()
     page_size = 1000
     start = 0
@@ -413,8 +416,14 @@ def symbols_needing_prices() -> list[str]:
         page = r.json()
         symbols.update(row["resolved_symbol"] for row in page)
         if len(page) < page_size:
-            return sorted(symbols)
+            break
         start += page_size
+
+    r = _do("GET", _url("watchlist"), headers=_headers(),
+            params={"select": "symbol"}, timeout=30)
+    r.raise_for_status()
+    symbols.update(row["symbol"] for row in r.json())
+    return sorted(symbols)
 
 
 def upsert_price_points(conn, points: list[dict], chunk_size: int = 500) -> int:
