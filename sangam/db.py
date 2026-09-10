@@ -337,7 +337,7 @@ def fetch_broker_instruments() -> list[dict]:
         start += page_size
 
 
-NSE_EQUITY_LIST_URL = "https://archives.nseindia.com/content/equity/EQUITY_L.csv"
+NSE_EQUITY_LIST_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
 
 
 def fetch_nse_equity_list() -> list[dict]:
