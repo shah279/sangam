@@ -382,11 +382,14 @@ BSE_EQUITY_LIST_LOCAL_PATH = config.ROOT / "sangam" / "data" / "BSE_EQUITY_LIST.
 
 
 def fetch_bse_equity_list() -> list[dict]:
-    """Read BSE's equity list from a manually-downloaded local copy: symbol
-    (BSE's "Security Id") + company name ("Issuer Name"). Unlike NSE, no
-    working unauthenticated live URL was found for this — BSE's site is a
-    modern SPA whose data API blocks cross-origin/automated requests — so
-    this is local-file-only. Refresh occasionally by re-downloading from
+    """Read BSE's equity list from a manually-downloaded local copy. BSE
+    identifies a company two ways that both show up in casual use — the
+    alphabetic "Security Id" (e.g. "ABB") and the numeric "Security Code"
+    scrip code (e.g. "500002") — so both are returned; callers should index
+    a company's name under each. Unlike NSE, no working unauthenticated live
+    URL was found for this — BSE's site is a modern SPA whose data API
+    blocks cross-origin/automated requests — so this is local-file-only.
+    Refresh occasionally by re-downloading from
     bseindia.com/corporates/List_Scrips.aspx (Segment: Equity T+1, Status:
     Active) and replacing the file. Returns [] if the file isn't present, so
     normalize.py degrades gracefully (BSE-only names just won't show).
@@ -397,6 +400,7 @@ def fetch_bse_equity_list() -> list[dict]:
     return [
         {
             "symbol": (row.get("Security Id") or "").strip(),
+            "scrip_code": (row.get("Security Code") or "").strip(),
             "name": (row.get("Issuer Name") or "").strip(),
             "status": (row.get("Status") or "").strip(),
         }

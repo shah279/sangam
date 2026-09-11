@@ -418,7 +418,9 @@ def sync_instrument_names() -> StageResult:
     just the code. BSE rows are keyed with the same "BSE:" prefix the app
     uses for BSE-only watchlist entries — so a ticker that happens to exist
     on both exchanges with different underlying companies can never show the
-    wrong one's name.
+    wrong one's name. BSE companies are commonly referred to by either their
+    alphabetic Security Id ("ABB") or their numeric scrip code ("500002"), so
+    each active row is indexed under both forms.
     """
     from . import db
 
@@ -430,11 +432,13 @@ def sync_instrument_names() -> StageResult:
         for row in nse_rows
         if row.get("symbol") and row.get("name")
     ]
-    pairs += [
-        {"symbol": f"BSE:{row['symbol'].strip()}", "name": row["name"].strip()}
-        for row in bse_rows
-        if row.get("symbol") and row.get("name") and row.get("status", "Active") == "Active"
-    ]
+    for row in bse_rows:
+        if not (row.get("name") and row.get("status", "Active") == "Active"):
+            continue
+        name = row["name"].strip()
+        for identifier in (row.get("symbol"), row.get("scrip_code")):
+            if identifier:
+                pairs.append({"symbol": f"BSE:{identifier.strip()}", "name": name})
 
     with db.connect() as conn:
         updated = db.upsert_instrument_names(conn, pairs)

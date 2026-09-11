@@ -76,7 +76,8 @@ class BseEquityListTests(unittest.TestCase):
                 rows = db.fetch_bse_equity_list()
 
         self.assertEqual(
-            [{"symbol": "ABB", "name": "ABB India Limited", "status": "Active"}], rows
+            [{"symbol": "ABB", "scrip_code": "500002", "name": "ABB India Limited", "status": "Active"}],
+            rows,
         )
 
 
@@ -612,15 +613,19 @@ class NormalizationTests(unittest.TestCase):
     @patch(
         "sangam.db.fetch_bse_equity_list",
         return_value=[
-            {"symbol": "ABB", "name": "ABB India Limited", "status": "Active"},
-            {"symbol": "DELISTEDCO", "name": "Some Delisted Co", "status": "Delisted"},
+            {"symbol": "ABB", "scrip_code": "500002", "name": "ABB India Limited", "status": "Active"},
+            {"symbol": "DELISTEDCO", "scrip_code": "999999", "name": "Some Delisted Co", "status": "Delisted"},
         ],
     )
-    def test_sync_instrument_names_prefixes_bse_rows_and_skips_inactive(self, _bse, _nse, upsert):
+    def test_sync_instrument_names_indexes_bse_rows_by_id_and_scrip_code(self, _bse, _nse, upsert):
         result = normalize.sync_instrument_names()
 
         upsert.assert_called_once_with(
-            None, [{"symbol": "BSE:ABB", "name": "ABB India Limited"}]
+            None,
+            [
+                {"symbol": "BSE:ABB", "name": "ABB India Limited"},
+                {"symbol": "BSE:500002", "name": "ABB India Limited"},
+            ],
         )
         self.assertEqual(StageResult("instrument_names", 2, 2), result)
 
