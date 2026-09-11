@@ -378,6 +378,32 @@ def fetch_nse_equity_list() -> list[dict]:
     return []
 
 
+BSE_EQUITY_LIST_LOCAL_PATH = config.ROOT / "sangam" / "data" / "BSE_EQUITY_LIST.csv"
+
+
+def fetch_bse_equity_list() -> list[dict]:
+    """Read BSE's equity list from a manually-downloaded local copy: symbol
+    (BSE's "Security Id") + company name ("Issuer Name"). Unlike NSE, no
+    working unauthenticated live URL was found for this — BSE's site is a
+    modern SPA whose data API blocks cross-origin/automated requests — so
+    this is local-file-only. Refresh occasionally by re-downloading from
+    bseindia.com/corporates/List_Scrips.aspx (Segment: Equity T+1, Status:
+    Active) and replacing the file. Returns [] if the file isn't present, so
+    normalize.py degrades gracefully (BSE-only names just won't show).
+    """
+    if not BSE_EQUITY_LIST_LOCAL_PATH.exists():
+        return []
+    reader = csv.DictReader(io.StringIO(BSE_EQUITY_LIST_LOCAL_PATH.read_text(encoding="utf-8-sig")))
+    return [
+        {
+            "symbol": (row.get("Security Id") or "").strip(),
+            "name": (row.get("Issuer Name") or "").strip(),
+            "status": (row.get("Status") or "").strip(),
+        }
+        for row in reader
+    ]
+
+
 def fetch_external(url: str, *, timeout: float = 30, **kwargs) -> httpx.Response:
     """GET a public third-party endpoint (e.g. Yahoo Finance) with the same
     retry/backoff used for Supabase calls. Unlike fetch_feed/fetch_youtube_page,
@@ -432,6 +458,19 @@ def upsert_price_points(conn, points: list[dict], chunk_size: int = 500) -> int:
     for offset in range(0, len(points), chunk_size):
         chunk = points[offset:offset + chunk_size]
         r = _do("POST", _url("price_points"),
+                headers=_headers({"Prefer": "resolution=merge-duplicates"}),
+                json=chunk, timeout=30)
+        r.raise_for_status()
+        updated += len(chunk)
+    return updated
+
+
+def upsert_instrument_names(conn, rows: list[dict], chunk_size: int = 500) -> int:
+    """Batch-insert symbol -> company name pairs, merging on symbol."""
+    updated = 0
+    for offset in range(0, len(rows), chunk_size):
+        chunk = rows[offset:offset + chunk_size]
+        r = _do("POST", _url("instrument_names"),
                 headers=_headers({"Prefer": "resolution=merge-duplicates"}),
                 json=chunk, timeout=30)
         r.raise_for_status()

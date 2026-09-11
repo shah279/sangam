@@ -243,3 +243,20 @@ DROP POLICY IF EXISTS "public remove from watchlist" ON public.watchlist;
 CREATE POLICY "public read watchlist" ON public.watchlist FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY "public add to watchlist" ON public.watchlist FOR INSERT TO anon, authenticated WITH CHECK (true);
 CREATE POLICY "public remove from watchlist" ON public.watchlist FOR DELETE TO anon, authenticated USING (true);
+
+-- Symbol -> registered company name, so the app can show "RELIANCE — Reliance
+-- Industries Limited" instead of a bare ticker. Sourced from NSE's public
+-- equity list (see normalize.sync_instrument_names) — the broker instrument
+-- master's own `name` field turned out to just repeat the ticker, so it's
+-- not useful for this. Covers NSE-listed symbols only.
+CREATE TABLE IF NOT EXISTS instrument_names (
+    symbol      TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.instrument_names ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.instrument_names FROM anon, authenticated;
+GRANT SELECT ON TABLE public.instrument_names TO anon, authenticated;
+DROP POLICY IF EXISTS "public read instrument_names" ON public.instrument_names;
+CREATE POLICY "public read instrument_names" ON public.instrument_names FOR SELECT TO anon, authenticated USING (true);

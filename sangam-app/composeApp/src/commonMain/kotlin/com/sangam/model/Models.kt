@@ -100,6 +100,12 @@ data class PricePoint(
 )
 
 @Serializable
+data class InstrumentName(
+    val symbol: String,
+    val name: String,
+)
+
+@Serializable
 data class WatchlistItem(
     val id: Long? = null,
     val symbol: String,

@@ -31,11 +31,19 @@ fun RadarScreen(nav: Navigator) {
     val scope = rememberCoroutineScope()
     val state by loadState(refreshKey) {
         val items = Repository.watchlist()
-        items to Repository.latestPrices(items.map { it.symbol }.distinct())
+        val symbols = items.map { it.symbol }.distinct()
+        Triple(
+            items,
+            Repository.latestPrices(symbols),
+            // instrument_names keys BSE rows with the same "BSE:" prefix watchlist
+            // uses, so this looks up the raw symbol as-is — never the stripped
+            // display form, which could collide with an unrelated NSE ticker.
+            Repository.instrumentNames(symbols),
+        )
     }
 
     Box(Modifier.fillMaxSize()) {
-        AsyncContent(state) { (items, prices) ->
+        AsyncContent(state) { (items, prices, names) ->
             if (items.isEmpty()) {
                 EmptyHint("Add a pick from its Stock screen, or tap + to add a symbol directly.")
             } else {
@@ -44,7 +52,7 @@ fun RadarScreen(nav: Navigator) {
                     contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
                 ) {
                     items(items, key = { it.id ?: it.symbol }) { item ->
-                        RadarRow(item, prices[item.symbol]?.close) {
+                        RadarRow(item, prices[item.symbol]?.close, names[item.symbol]) {
                             scope.launch {
                                 item.id?.let { Repository.removeFromWatchlist(it) }
                                 refreshKey++
@@ -124,7 +132,7 @@ private fun AddSymbolDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
 }
 
 @Composable
-private fun RadarRow(item: WatchlistItem, currentPrice: Double?, onRemove: () -> Unit) {
+private fun RadarRow(item: WatchlistItem, currentPrice: Double?, companyName: String?, onRemove: () -> Unit) {
     val entry = item.entryPrice
     val change = if (entry != null && entry != 0.0 && currentPrice != null) {
         (currentPrice - entry) / entry * 100
@@ -139,6 +147,9 @@ private fun RadarRow(item: WatchlistItem, currentPrice: Double?, onRemove: () ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(displaySymbol(item.symbol), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     if (item.symbol.startsWith("BSE:")) Pill("BSE", MaterialTheme.colorScheme.secondary)
+                }
+                companyName?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
                 Text(
                     "Added ${relativeDay(item.addedAt)}" + (entry?.let { " · entry ₹${round(it * 100) / 100}" } ?: ""),

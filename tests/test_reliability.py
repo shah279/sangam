@@ -58,6 +58,28 @@ class PriceSymbolSourcingTests(unittest.TestCase):
         self.assertIn("watchlist", str(do.call_args_list[1]))
 
 
+class BseEquityListTests(unittest.TestCase):
+    def test_returns_empty_when_local_file_missing(self):
+        with patch("sangam.db.BSE_EQUITY_LIST_LOCAL_PATH", Path("/nonexistent/BSE_EQUITY_LIST.csv")):
+            self.assertEqual([], db.fetch_bse_equity_list())
+
+    def test_parses_bse_export_column_headers(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "BSE_EQUITY_LIST.csv"
+            path.write_text(
+                "Security Code,Issuer Name,Security Id,Security Name,Status,Group,"
+                "Face Value,ISIN No,Instrument\n"
+                "500002,ABB India Limited,ABB,ABB India Ltd,Active,A ,2.00,INE117A01022,Equity\n",
+                encoding="utf-8",
+            )
+            with patch("sangam.db.BSE_EQUITY_LIST_LOCAL_PATH", path):
+                rows = db.fetch_bse_equity_list()
+
+        self.assertEqual(
+            [{"symbol": "ABB", "name": "ABB India Limited", "status": "Active"}], rows
+        )
+
+
 class BrokerAuthTests(unittest.TestCase):
     """The broker-instruments project scopes its RLS policy to one dedicated
     Auth identity, not to anon — so fetching from it means signing in as that
@@ -562,6 +584,45 @@ class NormalizationTests(unittest.TestCase):
         result = ingest.run_unresolved()
 
         self.assertEqual(StageResult("unresolved", 1, 2), result)
+
+    @patch("sangam.db.upsert_instrument_names", return_value=2)
+    @patch("sangam.db.fetch_bse_equity_list", return_value=[])
+    @patch(
+        "sangam.db.fetch_nse_equity_list",
+        return_value=[
+            {"symbol": "RELIANCE", "name": "Reliance Industries Limited"},
+            {"symbol": "TCS", "name": "Tata Consultancy Services Limited"},
+            {"symbol": "", "name": "Missing Symbol Ltd"},  # dropped: no symbol
+        ],
+    )
+    def test_sync_instrument_names_upserts_nse_symbol_name_pairs(self, _nse, _bse, upsert):
+        result = normalize.sync_instrument_names()
+
+        upsert.assert_called_once_with(
+            None,
+            [
+                {"symbol": "RELIANCE", "name": "Reliance Industries Limited"},
+                {"symbol": "TCS", "name": "Tata Consultancy Services Limited"},
+            ],
+        )
+        self.assertEqual(StageResult("instrument_names", 2, 3), result)
+
+    @patch("sangam.db.upsert_instrument_names", return_value=2)
+    @patch("sangam.db.fetch_nse_equity_list", return_value=[])
+    @patch(
+        "sangam.db.fetch_bse_equity_list",
+        return_value=[
+            {"symbol": "ABB", "name": "ABB India Limited", "status": "Active"},
+            {"symbol": "DELISTEDCO", "name": "Some Delisted Co", "status": "Delisted"},
+        ],
+    )
+    def test_sync_instrument_names_prefixes_bse_rows_and_skips_inactive(self, _bse, _nse, upsert):
+        result = normalize.sync_instrument_names()
+
+        upsert.assert_called_once_with(
+            None, [{"symbol": "BSE:ABB", "name": "ABB India Limited"}]
+        )
+        self.assertEqual(StageResult("instrument_names", 2, 2), result)
 
     @patch("sangam.db.fetch_nse_equity_list", return_value=[])
     @patch("sangam.db.fetch_broker_instruments", return_value=[])

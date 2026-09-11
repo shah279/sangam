@@ -5,11 +5,12 @@ scheduled at different times (e.g. separate cron entries on a Termux device).
     python -m sangam.ingest discover
     python -m sangam.ingest captions
     python -m sangam.ingest extract
-    python -m sangam.ingest normalize   # backfill canonical instrument symbols
-    python -m sangam.ingest unresolved  # list unresolved stock names worth a curated alias
-    python -m sangam.ingest prices      # fetch EOD closes for resolved symbols
-    python -m sangam.ingest retry       # requeue terminal/legacy failures
-    python -m sangam.ingest init        # verify the deployed schema only
+    python -m sangam.ingest normalize          # backfill canonical instrument symbols
+    python -m sangam.ingest unresolved         # list unresolved stock names worth a curated alias
+    python -m sangam.ingest instrument_names   # refresh symbol -> company name lookup for the app
+    python -m sangam.ingest prices             # fetch EOD closes for resolved symbols
+    python -m sangam.ingest retry              # requeue terminal/legacy failures
+    python -m sangam.ingest init               # verify the deployed schema only
 """
 from __future__ import annotations
 import sys
@@ -78,6 +79,10 @@ def run_unresolved() -> StageResult:
     return normalize.run_unresolved_report()
 
 
+def run_instrument_names() -> StageResult:
+    return normalize.sync_instrument_names()
+
+
 def run_prices() -> StageResult:
     return prices.run()
 
@@ -96,6 +101,7 @@ STAGES = {
     "extract": run_extract,
     "normalize": run_normalize,
     "unresolved": run_unresolved,
+    "instrument_names": run_instrument_names,
     "prices": run_prices,
     "retry": retry_failed,
 }

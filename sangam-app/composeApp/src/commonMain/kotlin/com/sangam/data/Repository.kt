@@ -88,6 +88,14 @@ object Repository {
         return points.associateBy { it.symbol }
     }
 
+    /** Company name per symbol, for display alongside a bare ticker (NSE-listed only). */
+    suspend fun instrumentNames(symbols: List<String>): Map<String, String> {
+        if (symbols.isEmpty()) return emptyMap()
+        val inList = symbols.joinToString(",") { it.encodeURLQueryComponent() }
+        val names: List<InstrumentName> = Supabase.select("instrument_names", "symbol=in.($inList)&select=*")
+        return names.associate { it.symbol to it.name }
+    }
+
     suspend fun watchlist(): List<WatchlistItem> =
         Supabase.select("watchlist", "select=*&order=added_at.desc")
 

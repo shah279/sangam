@@ -411,5 +411,39 @@ def run_unresolved_report(min_count: int = 2) -> StageResult:
     return StageResult("unresolved", len(report), len(rows))
 
 
+def sync_instrument_names() -> StageResult:
+    """Refresh the app-facing symbol -> company name lookup (instrument_names)
+    from NSE's public equity list and a locally-bundled BSE list, so Radar
+    and similar screens can show a name alongside a bare ticker instead of
+    just the code. BSE rows are keyed with the same "BSE:" prefix the app
+    uses for BSE-only watchlist entries — so a ticker that happens to exist
+    on both exchanges with different underlying companies can never show the
+    wrong one's name.
+    """
+    from . import db
+
+    nse_rows = db.fetch_nse_equity_list()
+    bse_rows = db.fetch_bse_equity_list()
+
+    pairs = [
+        {"symbol": (row.get("symbol") or "").strip(), "name": (row.get("name") or "").strip()}
+        for row in nse_rows
+        if row.get("symbol") and row.get("name")
+    ]
+    pairs += [
+        {"symbol": f"BSE:{row['symbol'].strip()}", "name": row["name"].strip()}
+        for row in bse_rows
+        if row.get("symbol") and row.get("name") and row.get("status", "Active") == "Active"
+    ]
+
+    with db.connect() as conn:
+        updated = db.upsert_instrument_names(conn, pairs)
+    print(
+        f"instrument_names: {updated} name(s) synced "
+        f"({len(nse_rows)} NSE, {len(bse_rows)} BSE row(s) read)"
+    )
+    return StageResult("instrument_names", updated, len(nse_rows) + len(bse_rows))
+
+
 if __name__ == "__main__":
     raise SystemExit(0 if run().ok else 1)
