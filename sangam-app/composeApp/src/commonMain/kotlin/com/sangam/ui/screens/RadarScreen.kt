@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.sangam.data.Repository
 import com.sangam.model.WatchlistItem
 import com.sangam.ui.*
+import com.sangam.ui.components.Pill
 import com.sangam.ui.theme.SangamColors
 import com.sangam.util.relativeDay
 import kotlinx.coroutines.launch
@@ -36,7 +37,7 @@ fun RadarScreen(nav: Navigator) {
     Box(Modifier.fillMaxSize()) {
         AsyncContent(state) { (items, prices) ->
             if (items.isEmpty()) {
-                EmptyHint("Add a pick from its Stock screen, or tap + to add an NSE symbol directly.")
+                EmptyHint("Add a pick from its Stock screen, or tap + to add a symbol directly.")
             } else {
                 LazyColumn(
                     Modifier.fillMaxSize(),
@@ -80,13 +81,14 @@ fun RadarScreen(nav: Navigator) {
 @Composable
 private fun AddSymbolDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
     var symbol by remember { mutableStateOf("") }
+    var exchange by remember { mutableStateOf("NSE") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add to radar") },
         text = {
             Column {
                 Text(
-                    "Enter the NSE ticker symbol (e.g. RELIANCE, TCS) — not the company name.",
+                    "Enter the ticker symbol (e.g. RELIANCE, TCS) — not the company name.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -96,12 +98,26 @@ private fun AddSymbolDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
                     label = { Text("Symbol") },
                     singleLine = true,
                 )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = exchange == "NSE", onClick = { exchange = "NSE" }, label = { Text("NSE") })
+                    FilterChip(selected = exchange == "BSE", onClick = { exchange = "BSE" }, label = { Text("BSE") })
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Only pick BSE if this stock has no NSE listing.",
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onAdd(symbol.trim()) }, enabled = symbol.isNotBlank()) {
-                Text("Add")
-            }
+            TextButton(
+                onClick = {
+                    val trimmed = symbol.trim()
+                    onAdd(if (exchange == "BSE") "BSE:$trimmed" else trimmed)
+                },
+                enabled = symbol.isNotBlank(),
+            ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -120,7 +136,10 @@ private fun RadarRow(item: WatchlistItem, currentPrice: Double?, onRemove: () ->
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column {
-                Text(item.symbol, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(displaySymbol(item.symbol), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    if (item.symbol.startsWith("BSE:")) Pill("BSE", MaterialTheme.colorScheme.secondary)
+                }
                 Text(
                     "Added ${relativeDay(item.addedAt)}" + (entry?.let { " · entry ₹${round(it * 100) / 100}" } ?: ""),
                     style = MaterialTheme.typography.labelSmall,
@@ -148,3 +167,7 @@ private fun RadarRow(item: WatchlistItem, currentPrice: Double?, onRemove: () ->
         }
     }
 }
+
+/** watchlist.symbol carries a "BSE:" prefix for BSE-only picks (see prices.py's
+ * yahoo_ticker); strip it for display, showing a badge instead. */
+private fun displaySymbol(symbol: String): String = symbol.removePrefix("BSE:")

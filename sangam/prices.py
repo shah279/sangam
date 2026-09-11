@@ -28,6 +28,9 @@ HISTORY_RANGE = "2y"
 # normalize.py uses these prefixes for symbols already qualified to a foreign
 # exchange; Yahoo wants the bare ticker for those instead of an NSE suffix.
 _FOREIGN_PREFIXES = ("NASDAQ:", "NYSE:")
+# The app's "Add to radar" dialog uses this prefix for a BSE-only pick (one
+# with no NSE listing) — Yahoo wants a ".BO" suffix for those, not ".NS".
+_BSE_PREFIX = "BSE:"
 # Non-equity resolved_symbol namespaces (sectors, indices, mutual funds, ...)
 # don't have a Yahoo EOD close in this scheme yet.
 _UNPRICEABLE_PREFIXES = ("MF:", "SECTOR:", "INDEX:", "GROUP:", "COMMODITY:")
@@ -38,6 +41,8 @@ def yahoo_ticker(symbol: str) -> str | None:
     for prefix in _FOREIGN_PREFIXES:
         if symbol.startswith(prefix):
             return symbol[len(prefix):]
+    if symbol.startswith(_BSE_PREFIX):
+        return f"{symbol[len(_BSE_PREFIX):]}.BO"
     if symbol.startswith(_UNPRICEABLE_PREFIXES):
         return None
     return f"{symbol}.NS"

@@ -635,6 +635,7 @@ class PriceTests(unittest.TestCase):
         self.assertEqual("RELIANCE.NS", prices.yahoo_ticker("RELIANCE"))
         self.assertEqual("NVDA", prices.yahoo_ticker("NASDAQ:NVDA"))
         self.assertEqual("WMT", prices.yahoo_ticker("NYSE:WMT"))
+        self.assertEqual("SOMEBSESTOCK.BO", prices.yahoo_ticker("BSE:SOMEBSESTOCK"))
         self.assertIsNone(prices.yahoo_ticker("SECTOR:IT"))
         self.assertIsNone(prices.yahoo_ticker("MF:HDFC_FLEXI_CAP"))
 
