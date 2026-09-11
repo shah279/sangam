@@ -96,6 +96,11 @@ object Repository {
         return names.associate { it.symbol to it.name }
     }
 
+    /** Per-creator forward-return performance on bullish calls (computed server-side —
+     * see the creator_scorecard view — since it joins against years of price history). */
+    suspend fun creatorScorecard(): List<ScorecardEntry> =
+        Supabase.select("creator_scorecard", "select=*")
+
     suspend fun watchlist(): List<WatchlistItem> =
         Supabase.select("watchlist", "select=*&order=added_at.desc")
 

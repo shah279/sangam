@@ -106,6 +106,17 @@ data class InstrumentName(
 )
 
 @Serializable
+data class ScorecardEntry(
+    @SerialName("channel_id") val channelId: String,
+    @SerialName("creator_name") val creatorName: String,
+    @SerialName("source_type") val sourceType: String? = null,
+    @SerialName("is_sebi_registered") val isSebiRegistered: Boolean? = null,
+    @SerialName("sample_size") val sampleSize: Int,
+    @SerialName("avg_return_pct") val avgReturnPct: Double? = null,
+    @SerialName("hit_rate_pct") val hitRatePct: Double? = null,
+)
+
+@Serializable
 data class WatchlistItem(
     val id: Long? = null,
     val symbol: String,

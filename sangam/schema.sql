@@ -260,3 +260,62 @@ REVOKE ALL ON TABLE public.instrument_names FROM anon, authenticated;
 GRANT SELECT ON TABLE public.instrument_names TO anon, authenticated;
 DROP POLICY IF EXISTS "public read instrument_names" ON public.instrument_names;
 CREATE POLICY "public read instrument_names" ON public.instrument_names FOR SELECT TO anon, authenticated USING (true);
+
+-- Per-creator forward-return performance: for every bullish, resolved stock
+-- call (buy / future_opportunity / wait_for_dip), the entry price is the
+-- first cached close on or after the mention's publish date, and the
+-- current price is the latest cached close. Aggregated per creator into a
+-- sample size, average return, and hit rate. This is deliberately a view
+-- (computed in Postgres, not fetched raw and crunched on the phone) since it
+-- joins mentions against the full price_points history — pushing that join
+-- to the database keeps the app's payload to one small row per creator
+-- instead of pulling years of daily closes down to compute client-side.
+-- security_invoker means the querying role's own grants/RLS apply — already
+-- fine here since every underlying table already grants anon/authenticated
+-- read access.
+CREATE OR REPLACE VIEW public.creator_scorecard AS
+WITH bullish_calls AS (
+    SELECT
+        m.id,
+        v.channel_id,
+        m.resolved_symbol AS symbol,
+        v.published_at::date AS call_date
+    FROM public.mentions m
+    JOIN public.videos v ON v.video_id = m.video_id
+    WHERE m.instrument_type = 'stock'
+      AND m.resolved_symbol IS NOT NULL
+      AND m.action IN ('buy', 'future_opportunity', 'wait_for_dip')
+      AND m.source IS DISTINCT FROM 'description'
+      AND (m.confidence IS NULL OR m.confidence >= 0.55)
+),
+entry_prices AS (
+    SELECT DISTINCT ON (bc.id)
+        bc.id, bc.channel_id, bc.symbol, pp.close AS entry_price
+    FROM bullish_calls bc
+    JOIN public.price_points pp
+      ON pp.symbol = bc.symbol AND pp.price_date >= bc.call_date
+    ORDER BY bc.id, pp.price_date ASC
+),
+scored_calls AS (
+    SELECT
+        ep.channel_id,
+        (lp.close - ep.entry_price) / NULLIF(ep.entry_price, 0) * 100 AS return_pct
+    FROM entry_prices ep
+    JOIN public.latest_prices lp ON lp.symbol = ep.symbol
+)
+SELECT
+    c.channel_id,
+    c.name AS creator_name,
+    c.source_type,
+    c.is_sebi_registered,
+    COUNT(*) AS sample_size,
+    ROUND(AVG(sc.return_pct)::numeric, 2) AS avg_return_pct,
+    ROUND(
+        (COUNT(*) FILTER (WHERE sc.return_pct > 0))::numeric / NULLIF(COUNT(*), 0) * 100, 1
+    ) AS hit_rate_pct
+FROM scored_calls sc
+JOIN public.channels c ON c.channel_id = sc.channel_id
+GROUP BY c.channel_id, c.name, c.source_type, c.is_sebi_registered;
+
+ALTER VIEW public.creator_scorecard SET (security_invoker = true);
+GRANT SELECT ON public.creator_scorecard TO anon, authenticated;
